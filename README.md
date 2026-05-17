@@ -6,6 +6,8 @@
 
 **Qoder** 是一款开源的桌面视频下载与播放工具，支持 HTTP/HTTPS 多线程高速下载、磁力链接/BT 下载、本地视频播放，以及简洁的 PotPlayer 风格界面。
 
+> 代码开源，结构清晰。适合作为 Python + PyQt6 桌面应用的学习参考项目。
+
 ---
 
 ## 功能特性
@@ -42,8 +44,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourname/qoder.git
-cd qoder
+git clone https://github.com/1371239533jkl/video-downloader.git
+cd video-downloader
 
 # 安装依赖
 pip install -r requirements.txt
@@ -52,8 +54,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-> **注意**：`libtorrent` 编译安装较复杂，建议 Windows 用户使用 `libtorrent-windows-dll`。
-> 如不需要磁力下载功能，可移除 `libtorrent` 依赖。
+> ⚠️ **libtorrent** 编译安装较复杂，如遇安装失败，可先移除 libtorrent 相关行再安装：
+> ```bash
+> pip install PyQt6 requests pysubs2
+> ```
+> 移除后磁力下载不可用，HTTP 下载和播放功能不受影响。
 
 ### 打包为 exe
 
@@ -169,10 +174,9 @@ Qoder/
 - [x] 双主题支持
 - [x] 下载队列管理
 - [x] 播放列表持久化
-- [x] 自定义请求头
 - [ ] mpv 引擎替换（替代 QMediaPlayer）
-- [ ] 视频嗅探优化
 - [ ] 批量任务操作（多选/全选）
+- [ ] 百度网盘资源下载
 
 ---
 
