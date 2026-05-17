@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+*.exe
+
+# 编辑器/IDE
+.qoder/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 临时下载文件（运行时生成）
+temp/
+*.tmp
+*.log
+
+# 运行时数据（每个用户独立）
+data/history.db
+data/settings.json
+data/playlist.json
+data/dht_state.dat
+data/.gitkeep
+
+# 第三方 DLL（需自行下载）
+*.dll
+core/lib/
+player/bin/
+
+# 系统
+Thumbs.db
+.DS_Store
