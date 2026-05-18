@@ -67,6 +67,21 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def get_records_by_status(self, status: str, keyword: str = '') -> list[dict]:
+        """按状态过滤历史记录，可选关键字搜索"""
+        with self._connect() as conn:
+            if keyword:
+                rows = conn.execute(
+                    'SELECT * FROM download_history WHERE status = ? AND file_name LIKE ? ORDER BY id DESC',
+                    (status, f'%{keyword}%')
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT * FROM download_history WHERE status = ? ORDER BY id DESC',
+                    (status,)
+                ).fetchall()
+            return [dict(row) for row in rows]
+
     def delete_record(self, task_id: str):
         """删除一条历史记录"""
         with self._connect() as conn:

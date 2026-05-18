@@ -178,8 +178,8 @@ class HistoryTab(QWidget):
         super().__init__()
         self.db = Database()
         self._cards = []
+        self._current_filter = 'all'  # all | completed | failed
         self._setup_ui()
-        # 延迟加载历史记录
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self.refresh)
 
@@ -188,12 +188,10 @@ class HistoryTab(QWidget):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
 
-        # 搜索和操作栏
+        # 搜索框
         top_row = QHBoxLayout()
-        search_label = QLabel('搜索:')
-        top_row.addWidget(search_label)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText('按文件名搜索...')
+        self.search_input.setPlaceholderText('🔍 搜索下载记录...')
         self.search_input.textChanged.connect(self._on_search)
         top_row.addWidget(self.search_input)
 
@@ -208,6 +206,28 @@ class HistoryTab(QWidget):
         btn_clear.clicked.connect(self._clear_all)
         top_row.addWidget(btn_clear)
         layout.addLayout(top_row)
+
+        # 过滤器按钮组
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+
+        self._filter_btns = {}
+        filters = [
+            ('all', '全部'),
+            ('completed', '已完成'),
+            ('failed', '失败'),
+        ]
+        for key, label in filters:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFixedHeight(26)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked, k=key: self._set_filter(k))
+            self._filter_btns[key] = btn
+            filter_row.addWidget(btn)
+
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
 
         # 历史列表
         scroll = QScrollArea()
@@ -230,13 +250,51 @@ class HistoryTab(QWidget):
         self.empty_label.setStyleSheet('font-size: 16px; padding: 40px;')
         layout.addWidget(self.empty_label)
 
+        self._update_filter_style()
+
+    def _set_filter(self, filter_key: str):
+        """切换过滤器"""
+        self._current_filter = filter_key
+        self._update_filter_style()
+        self.refresh()
+
+    def _update_filter_style(self):
+        """更新过滤器按钮样式"""
+        active_color = '#89B4FA'
+        inactive_bg = '#313244'
+        inactive_text = '#CDD6F4'
+        for key, btn in self._filter_btns.items():
+            if key == self._current_filter:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {active_color}; color: #1E1E2E;
+                        border-radius: 13px; padding: 0 14px;
+                        font-size: 12px; font-weight: bold;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {inactive_bg}; color: {inactive_text};
+                        border-radius: 13px; padding: 0 14px;
+                        font-size: 12px;
+                    }}
+                    QPushButton:hover {{
+                        background: #45475A;
+                    }}
+                """)
+
     def refresh(self):
         """刷新历史记录列表"""
         keyword = self.search_input.text().strip()
-        if keyword:
-            records = self.db.search_records(keyword)
+
+        if self._current_filter == 'all':
+            if keyword:
+                records = self.db.search_records(keyword)
+            else:
+                records = self.db.get_all_records()
         else:
-            records = self.db.get_all_records()
+            records = self.db.get_records_by_status(self._current_filter, keyword)
 
         self._clear_cards()
 
