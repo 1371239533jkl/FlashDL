@@ -10,9 +10,10 @@
 
 ## 界面预览
 
-![下载标签页](screenshots/download-tab.svg)
-
-*深色主题 · 多任务队列 · 实时速度和进度 · 暂停/停止/删除*
+| 下载页 | 播放页 | 历史页 |
+|:------:|:------:|:------:|
+| ![下载标签页](screenshots/download-tab.svg) | ![播放标签页](screenshots/player-tab.svg) | ![历史标签页](screenshots/history-tab.svg) |
+| *多任务下载 · 实时速度 · 暂停/删除* | *视频播放 · 播放列表 · 字幕支持 · 倍速* | *搜索过滤 · 状态标记 · 历史记录* |
 
 ---
 

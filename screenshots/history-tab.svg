@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 460" font-family="system-ui, -apple-system, sans-serif">
+  <rect x="0" y="0" width="680" height="460" rx="8" fill="#1E1E2E"/>
+  <rect x="0" y="0" width="680" height="36" fill="#181825" rx="8"/>
+  <rect x="0" y="28" width="680" height="8" fill="#181825"/>
+  <text x="20" y="24" fill="#CDD6F4" font-size="12" font-weight="500">Qoder - 极简视频下载播放器</text>
+  <circle cx="640" cy="18" r="5" fill="#F38BA8"/>
+  <circle cx="655" cy="18" r="5" fill="#F9E2AF"/>
+  <circle cx="670" cy="18" r="5" fill="#A6E3A1"/>
+  <rect x="0" y="36" width="680" height="32" fill="#1E1E2E"/>
+  <text x="22" y="55" fill="#6C7086" font-size="12">⬇ 下载</text>
+  <text x="96" y="55" fill="#6C7086" font-size="12">🎬 播放</text>
+  <rect x="160" y="38" width="72" height="26" rx="4" fill="#313244"/>
+  <text x="172" y="55" fill="#CDD6F4" font-size="12" font-weight="500">📋 历史</text>
+  <rect x="0" y="68" width="680" height="1" fill="#313244"/>
+  <!-- Search bar -->
+  <rect x="12" y="80" width="656" height="30" rx="4" fill="#313244"/>
+  <text x="24" y="100" fill="#585B70" font-size="11">🔍 搜索下载记录...</text>
+  <!-- Filter chips -->
+  <rect x="12" y="118" width="60" height="22" rx="11" fill="#89B4FA"/>
+  <text x="22" y="134" fill="#1E1E2E" font-size="10">全部</text>
+  <rect x="80" y="118" width="60" height="22" rx="11" fill="#45475A"/>
+  <text x="90" y="134" fill="#CDD6F4" font-size="10">已完成</text>
+  <rect x="148" y="118" width="60" height="22" rx="11" fill="#45475A"/>
+  <text x="158" y="134" fill="#CDD6F4" font-size="10">失败</text>
+  <!-- History list -->
+  <rect x="12" y="152" width="656" height="44" rx="6" fill="#313244"/>
+  <text x="22" y="174" fill="#A6E3A1" font-size="11">✅</text>
+  <text x="42" y="174" fill="#CDD6F4" font-size="12">武汉旅游攻略.mp4</text>
+  <text x="300" y="174" fill="#6C7086" font-size="10">128.0 MB</text>
+  <text x="400" y="174" fill="#6C7086" font-size="10">4线程</text>
+  <text x="480" y="174" fill="#6C7086" font-size="10">2025-05-18 12:30</text>
+  <text x="630" y="174" fill="#6C7086" font-size="10">▶</text>
+
+  <rect x="12" y="200" width="656" height="44" rx="6" fill="#313244"/>
+  <text x="22" y="222" fill="#A6E3A1" font-size="11">✅</text>
+  <text x="42" y="222" fill="#CDD6F4" font-size="12">Game.of.Thrones.S01E01.mkv</text>
+  <text x="300" y="222" fill="#6C7086" font-size="10">2.4 GB</text>
+  <text x="400" y="222" fill="#6C7086" font-size="10">16线程</text>
+  <text x="480" y="222" fill="#6C7086" font-size="10">2025-05-17 08:15</text>
+
+  <rect x="12" y="248" width="656" height="44" rx="6" fill="#313244"/>
+  <text x="22" y="270" fill="#F9E2AF" font-size="11">⏸</text>
+  <text x="42" y="270" fill="#CDD6F4" font-size="12">2025最新电影.mkv</text>
+  <text x="300" y="270" fill="#6C7086" font-size="10">未完成</text>
+  <text x="400" y="270" fill="#6C7086" font-size="10">8线程</text>
+  <text x="480" y="270" fill="#6C7086" font-size="10">2025-05-16 22:00</text>
+  <text x="630" y="270" fill="#6C7086" font-size="10">▶</text>
+
+  <rect x="12" y="296" width="656" height="44" rx="6" fill="#313244"/>
+  <text x="22" y="318" fill="#F38BA8" font-size="11">❌</text>
+  <text x="42" y="318" fill="#CDD6F4" font-size="12">[磁力] 纪录片合集</text>
+  <text x="300" y="318" fill="#6C7086" font-size="10">失败</text>
+  <text x="400" y="318" fill="#6C7086" font-size="10">-</text>
+  <text x="480" y="318" fill="#6C7086" font-size="10">2025-05-15 14:30</text>
+
+  <rect x="12" y="344" width="656" height="44" rx="6" fill="#313244"/>
+  <text x="22" y="366" fill="#A6E3A1" font-size="11">✅</text>
+  <text x="42" y="366" fill="#CDD6F4" font-size="12">旅行vlog.mp4</text>
+  <text x="300" y="366" fill="#6C7086" font-size="10">450.2 MB</text>
+  <text x="400" y="366" fill="#6C7086" font-size="10">4线程</text>
+  <text x="480" y="366" fill="#6C7086" font-size="10">2025-05-14 19:45</text>
+
+  <rect x="0" y="440" width="680" height="20" fill="#181825"/>
+  <text x="12" y="454" fill="#585B70" font-size="10">共 12 条记录 · 已完成 9 · 失败 1</text>
+</svg>

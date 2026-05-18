@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 460" font-family="system-ui, -apple-system, sans-serif">
+  <rect x="0" y="0" width="680" height="460" rx="8" fill="#1E1E2E"/>
+  <rect x="0" y="0" width="680" height="36" fill="#181825" rx="8"/>
+  <rect x="0" y="28" width="680" height="8" fill="#181825"/>
+  <text x="20" y="24" fill="#CDD6F4" font-size="12" font-weight="500">Qoder - 极简视频下载播放器</text>
+  <circle cx="640" cy="18" r="5" fill="#F38BA8"/>
+  <circle cx="655" cy="18" r="5" fill="#F9E2AF"/>
+  <circle cx="670" cy="18" r="5" fill="#A6E3A1"/>
+  <rect x="0" y="36" width="680" height="32" fill="#1E1E2E"/>
+  <text x="22" y="55" fill="#6C7086" font-size="12">⬇ 下载</text>
+  <rect x="88" y="38" width="72" height="26" rx="4" fill="#313244"/>
+  <text x="98" y="55" fill="#CDD6F4" font-size="12" font-weight="500">🎬 播放</text>
+  <text x="172" y="55" fill="#6C7086" font-size="12">📋 历史</text>
+  <rect x="0" y="68" width="680" height="1" fill="#313244"/>
+  <!-- Video area -->
+  <rect x="12" y="78" width="460" height="260" rx="6" fill="#11111B"/>
+  <text x="242" y="210" fill="#313244" font-size="32" text-anchor="middle">▶</text>
+  <text x="242" y="240" fill="#585B70" font-size="11" text-anchor="middle">武汉旅游攻略.mp4</text>
+  <!-- Playlist panel -->
+  <rect x="482" y="78" width="186" height="260" rx="6" fill="#181825"/>
+  <text x="492" y="98" fill="#6C7086" font-size="11" font-weight="500">播放列表</text>
+  <rect x="492" y="106" width="168" height="30" rx="4" fill="#313244"/>
+  <text x="498" y="126" fill="#A6E3A1" font-size="11">▶ 武汉旅游攻略.mp4</text>
+  <rect x="492" y="140" width="168" height="28" rx="4" fill="#1E1E2E"/>
+  <text x="498" y="159" fill="#6C7086" font-size="11">  Game.of.Thrones.S01.mkv</text>
+  <rect x="492" y="172" width="168" height="28" rx="4" fill="#1E1E2E"/>
+  <text x="498" y="191" fill="#6C7086" font-size="11">  2025最新电影.mkv</text>
+  <rect x="492" y="204" width="168" height="28" rx="4" fill="#1E1E2E"/>
+  <text x="498" y="223" fill="#6C7086" font-size="11">  旅行vlog.mp4</text>
+  <rect x="492" y="236" width="168" height="28" rx="4" fill="#1E1E2E"/>
+  <text x="498" y="255" fill="#6C7086" font-size="11">  教学视频.mov</text>
+  <rect x="492" y="316" width="168" height="22" rx="4" fill="#45475A"/>
+  <text x="498" y="332" fill="#A6ADC8" font-size="10">拖动文件到此处添加</text>
+  <!-- Progress bar -->
+  <rect x="12" y="346" width="656" height="4" rx="2" fill="#313244"/>
+  <rect x="12" y="346" width="260" height="4" rx="2" fill="#89B4FA"/>
+  <!-- Time display -->
+  <text x="12" y="368" fill="#6C7086" font-size="10">00:03:25 / 00:12:48</text>
+  <!-- Controls -->
+  <rect x="140" y="380" width="32" height="28" rx="4" fill="#313244"/>
+  <text x="148" y="400" fill="#CDD6F4" font-size="12">⏮</text>
+  <rect x="180" y="380" width="32" height="28" rx="4" fill="#313244"/>
+  <text x="188" y="400" fill="#CDD6F4" font-size="12">⏸</text>
+  <rect x="220" y="380" width="32" height="28" rx="4" fill="#313244"/>
+  <text x="228" y="400" fill="#CDD6F4" font-size="12">⏭</text>
+  <!-- Speed -->
+  <rect x="280" y="382" width="48" height="24" rx="4" fill="#45475A"/>
+  <text x="290" y="400" fill="#CDD6F4" font-size="10">1.0x</text>
+  <!-- Volume -->
+  <rect x="340" y="382" width="60" height="24" rx="4" fill="#45475A"/>
+  <text x="348" y="400" fill="#CDD6F4" font-size="10">音量 60%</text>
+  <!-- Subtitle -->
+  <rect x="412" y="382" width="48" height="24" rx="4" fill="#45475A"/>
+  <text x="420" y="400" fill="#CDD6F4" font-size="10">字幕</text>
+  <!-- Subtitle overlay -->
+  <rect x="120" y="300" width="240" height="24" rx="4" fill="#000000" opacity="0.6"/>
+  <text x="240" y="316" fill="#FFFFFF" font-size="11" text-anchor="middle">欢迎来到武汉</text>
+  <rect x="0" y="440" width="680" height="20" fill="#181825"/>
+  <text x="12" y="454" fill="#585B70" font-size="10">正在播放 · 音量 60% · 字幕: 中文</text>
+</svg>
