@@ -10,10 +10,17 @@
 
 ## 界面预览
 
-| 下载页 | 播放页 | 历史页 |
-|:------:|:------:|:------:|
-| ![下载标签页](screenshots/download-tab.svg) | ![播放标签页](screenshots/player-tab.svg) | ![历史标签页](screenshots/history-tab.svg) |
-| *多任务下载 · 实时速度 · 暂停/删除* | *视频播放 · 播放列表 · 字幕支持 · 倍速* | *搜索过滤 · 状态标记 · 历史记录* |
+### 下载页
+![下载标签页](screenshots/download-tab.svg)
+*多任务下载 · 实时速度 · 暂停/删除*
+
+### 播放页
+![播放标签页](screenshots/player-tab.svg)
+*视频播放 · 播放列表 · 字幕支持 · 倍速*
+
+### 历史页
+![历史标签页](screenshots/history-tab.svg)
+*搜索过滤 · 状态标记 · 历史记录*
 
 ---
 
