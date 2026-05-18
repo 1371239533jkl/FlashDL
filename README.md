@@ -1,10 +1,10 @@
-# BoltDL - 视频下载 & 播放工具
+# FlashDL - 视频下载 & 播放工具
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)](https://pypi.org/project/PyQt6/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
-**BoltDL** 是一款开源的桌面视频下载与播放工具，支持 HTTP/HTTPS 多线程高速下载、磁力链接/BT 下载、本地视频播放，以及简洁的 PotPlayer 风格界面。
+**FlashDL** 是一款开源的桌面视频下载与播放工具，支持 HTTP/HTTPS 多线程高速下载、磁力链接/BT 下载、本地视频播放，以及简洁的 PotPlayer 风格界面。
 
 > 代码开源，结构清晰。适合作为 Python + PyQt6 桌面应用的学习参考项目。
 
@@ -58,8 +58,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/1371239533jkl/BoltDL.git
-cd BoltDL
+git clone https://github.com/1371239533jkl/FlashDL.git
+cd FlashDL
 
 # 安装依赖
 pip install -r requirements.txt
@@ -128,7 +128,7 @@ pyinstaller video_downloader.spec
 ## 项目结构
 
 ```
-BoltDL/
+FlashDL/
 ├── main.py                  # 应用入口
 ├── config.py                # 全局配置
 ├── requirements.txt         # Python 依赖

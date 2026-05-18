@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 # 应用信息
-APP_NAME = "BoltDL - 视频下载 & 播放工具"
+APP_NAME = "FlashDL - 视频下载 & 播放工具"
 APP_VERSION = "1.0.0"
 
 # 下载配置

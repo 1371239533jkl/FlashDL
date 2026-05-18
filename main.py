@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-BoltDL - 下载 & 播放工具 - 应用入口
+FlashDL - 下载 & 播放工具 - 应用入口
 
 功能:
   - 多线程高速下载(HTTP Range分片)
