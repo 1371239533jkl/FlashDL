@@ -8,6 +8,12 @@
 
 > 代码开源，结构清晰。适合作为 Python + PyQt6 桌面应用的学习参考项目。
 
+## 界面预览
+
+![下载标签页](screenshots/download-tab.svg)
+
+*深色主题 · 多任务队列 · 实时速度和进度 · 暂停/停止/删除*
+
 ---
 
 ## 功能特性
@@ -177,6 +183,56 @@ Qoder/
 - [ ] mpv 引擎替换（替代 QMediaPlayer）
 - [ ] 批量任务操作（多选/全选）
 - [ ] 百度网盘资源下载
+
+---
+
+## 常见问题
+
+### libtorrent 安装失败
+```bash
+# Windows：安装预编译 DLL
+pip install libtorrent-windows-dll
+
+# 如仍失败，可跳过 libtorrent（磁力下载不可用，HTTP 下载正常）
+pip install PyQt6 requests pysubs2
+```
+
+### 下载速度慢
+- 检查是否为单线程下载（不支持 Range 的服务器只能单线程）
+- 增加线程数（16-32 线程效果较好）
+- CDN 链接有过期时间，长链接建议尽快下载
+
+### 磁力链接解析卡住（一直在解析中）
+- 等待元数据下载（需要连接 DHT 网络，首次可能较慢）
+- 检查网络是否限制了 P2P 端口
+- 可尝试重新添加任务
+
+### 启动报错 `Failed to initialize libtorrent session`
+```bash
+# 检查是否已安装 libtorrent
+pip list | findstr libtorrent
+
+# 如未安装，按上面方法安装或跳过
+```
+
+### 打包 exe 太大
+```bash
+# 先删旧包，再重新打包
+rm -rf dist build
+pyinstaller video_downloader.spec
+```
+
+### 程序闪退/无响应
+- 查看 `temp/` 目录下的日志文件
+- 磁力下载时 BT 端口（默认 6881）可能被防火墙拦截
+- 视频文件编码不兼容时，可尝试装 `K-Lite Codec Pack`
+
+### GitHub 推送失败
+```
+fatal: unable to access '...': Failed to connect to github.com port 443
+```
+- 检查 hosts 文件是否有 GitHub 重定向（常见于 Steam++ / Watt Toolkit）
+- 或切换为 SSH 方式推送
 
 ---
 

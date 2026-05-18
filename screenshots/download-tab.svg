@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 460" font-family="system-ui, -apple-system, sans-serif">
+  <rect x="0" y="0" width="680" height="460" rx="8" fill="#1E1E2E"/>
+  <rect x="0" y="0" width="680" height="36" fill="#181825" rx="8"/>
+  <rect x="0" y="28" width="680" height="8" fill="#181825"/>
+  <text x="20" y="24" fill="#CDD6F4" font-size="12" font-weight="500">Qoder - 极简视频下载播放器</text>
+  <circle cx="640" cy="18" r="5" fill="#F38BA8"/>
+  <circle cx="655" cy="18" r="5" fill="#F9E2AF"/>
+  <circle cx="670" cy="18" r="5" fill="#A6E3A1"/>
+  <rect x="0" y="36" width="680" height="32" fill="#1E1E2E"/>
+  <rect x="12" y="38" width="72" height="26" rx="4" fill="#313244"/>
+  <text x="22" y="55" fill="#CDD6F4" font-size="12" font-weight="500">⬇ 下载</text>
+  <text x="96" y="55" fill="#6C7086" font-size="12">🎬 播放</text>
+  <text x="168" y="55" fill="#6C7086" font-size="12">📋 历史</text>
+  <rect x="0" y="68" width="680" height="1" fill="#313244"/>
+  <text x="20" y="100" fill="#A6ADC8" font-size="12">下载链接:</text>
+  <rect x="90" y="84" width="420" height="30" rx="4" fill="#313244"/>
+  <text x="100" y="104" fill="#585B70" font-size="11">输入下载链接（HTTP/HTTPS/磁力链接）</text>
+  <rect x="518" y="84" width="52" height="30" rx="4" fill="#89B4FA"/>
+  <text x="530" y="104" fill="#1E1E2E" font-size="12" font-weight="500">添加</text>
+  <text x="20" y="132" fill="#A6ADC8" font-size="12">保存路径:</text>
+  <rect x="90" y="119" width="340" height="30" rx="4" fill="#313244"/>
+  <text x="100" y="139" fill="#585B70" font-size="11">G:\电影\</text>
+  <rect x="438" y="119" width="52" height="30" rx="4" fill="#45475A"/>
+  <text x="449" y="139" fill="#A6ADC8" font-size="11">浏览</text>
+  <text x="20" y="163" fill="#A6ADC8" font-size="12">线程数:</text>
+  <rect x="90" y="150" width="80" height="30" rx="4" fill="#313244"/>
+  <text x="105" y="170" fill="#CDD6F4" font-size="11">16 线程</text>
+  <rect x="0" y="196" width="680" height="28" fill="#181825"/>
+  <text x="20" y="214" fill="#6C7086" font-size="11">下载列表</text>
+  <rect x="12" y="224" width="656" height="56" rx="6" fill="#313244"/>
+  <rect x="24" y="236" width="28" height="28" rx="4" fill="#45475A"/>
+  <text x="30" y="256" fill="#A6E3A1" font-size="12">▶</text>
+  <text x="62" y="248" fill="#CDD6F4" font-size="12">武汉旅游攻略.mp4</text>
+  <text x="62" y="265" fill="#6C7086" font-size="11">45.2 MB / 128 MB · 3.2 MB/s</text>
+  <rect x="420" y="244" width="120" height="4" rx="2" fill="#45475A"/>
+  <rect x="420" y="244" width="55" height="4" rx="2" fill="#89B4FA"/>
+  <text x="550" y="248" fill="#A6E3A1" font-size="11">35%</text>
+  <text x="590" y="248" fill="#6C7086" font-size="11">⏸</text>
+  <text x="618" y="248" fill="#6C7086" font-size="11">⏹</text>
+  <text x="642" y="248" fill="#6C7086" font-size="11">🗑</text>
+  <rect x="12" y="286" width="656" height="56" rx="6" fill="#313244"/>
+  <rect x="24" y="298" width="28" height="28" rx="4" fill="#F9E2AF"/>
+  <text x="28" y="318" fill="#1E1E2E" font-size="11">🧲</text>
+  <text x="62" y="310" fill="#CDD6F4" font-size="12">[磁力] Game.of.Thrones.S01E01</text>
+  <text x="62" y="327" fill="#6C7086" font-size="11">正在解析元数据...</text>
+  <text x="590" y="310" fill="#6C7086" font-size="11">⏹</text>
+  <text x="642" y="310" fill="#6C7086" font-size="11">🗑</text>
+  <rect x="12" y="348" width="656" height="56" rx="6" fill="#313244"/>
+  <rect x="24" y="360" width="28" height="28" rx="4" fill="#45475A"/>
+  <text x="30" y="380" fill="#A6E3A1" font-size="12">▶</text>
+  <text x="62" y="372" fill="#CDD6F4" font-size="12">2025最新电影.mkv</text>
+  <text x="62" y="389" fill="#6C7086" font-size="11">完成 - 2.4 GB</text>
+  <rect x="420" y="368" width="120" height="4" rx="2" fill="#45475A"/>
+  <rect x="420" y="368" width="120" height="4" rx="2" fill="#A6E3A1"/>
+  <text x="550" y="372" fill="#A6E3A1" font-size="11">100%</text>
+  <text x="642" y="372" fill="#6C7086" font-size="11">🗑</text>
+  <rect x="0" y="440" width="680" height="20" fill="#181825"/>
+  <text x="12" y="454" fill="#585B70" font-size="10">3 个任务 · 下载中: 1 · 已完成: 1</text>
+</svg>
