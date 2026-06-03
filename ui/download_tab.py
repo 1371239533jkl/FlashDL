@@ -203,6 +203,14 @@ class TaskCard(QFrame):
         is_done = self._status == DownloadTask.COMPLETED
         is_failed = self._status == DownloadTask.FAILED
 
+        # 从任务对象更新 _is_video 和文件名（file_name 可能在 prepare() 后才确定）
+        task = self.download_manager.tasks.get(self.task_id)
+        if task and task.file_name and not self._is_video:
+            ext = os.path.splitext(task.file_name)[1].lower()
+            self._is_video = ext in config.VIDEO_EXTENSIONS
+        if task and task.file_name and self.name_label.text() == '准备中...':
+            self.name_label.setText(task.file_name)
+
         self.btn_pause.setVisible(is_active)
         self.btn_cancel.setVisible(is_active)
         self.btn_open_file.setVisible(is_done)
@@ -210,11 +218,9 @@ class TaskCard(QFrame):
         self.btn_play.setVisible(is_done and self._is_video)
         self.btn_retry.setVisible(is_failed)
 
-        # 边下边播按钮：下载中、进度>=5%、文件存在
-        task = self.download_manager.tasks.get(self.task_id)
-        can_stream = (task and task.streamable and self._is_video and
-                      task.supports_range and task.total_size > 0)
-        self.btn_stream_play.setVisible(can_stream)
+        # 边下边播按钮：下载中/暂停、进度>=5%、文件存在
+        can_stream = task and task.streamable and self._is_video
+        self.btn_stream_play.setVisible(can_stream and not is_done and not is_failed)
 
         if self._status == DownloadTask.PAUSED:
             self.btn_pause.setText('继续')

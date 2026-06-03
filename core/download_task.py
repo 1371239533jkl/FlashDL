@@ -85,8 +85,8 @@ class DownloadTask(QObject):
 
     @property
     def streamable(self) -> bool:
-        """是否可边下边播"""
-        return (self.status == self.DOWNLOADING
+        """是否可边下边播（下载中或暂停均可）"""
+        return (self.status in (self.DOWNLOADING, self.PAUSED)
                 and self.total_size > 0
                 and self.supports_range
                 and self.progress >= self.STREAM_PLAY_MIN_PROGRESS
