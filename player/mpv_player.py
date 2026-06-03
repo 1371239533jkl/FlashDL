@@ -142,7 +142,6 @@ class MpvPlayer(QObject):
         ]
 
         proc = QProcess(self)
-        proc.setProcessEnvironment(QObject.tr(""))  # reset
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         proc.finished.connect(self._on_mpv_exit)
 
