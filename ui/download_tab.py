@@ -39,8 +39,7 @@ class TaskCard(QFrame):
         # 第一行: 文件名 + 文件大小
         row1 = QHBoxLayout()
         self.name_label = QLabel(info.get('file_name', '准备中...'))
-        name_color = '#FFFFFF' if get_setting('theme', 'dark') == 'dark' else '#1A1A1A'
-        self.name_label.setStyleSheet(f'font-weight: bold; font-size: 14px; color: {name_color};')
+        self.name_label.setStyleSheet('font-weight: bold; font-size: 14px;')
         row1.addWidget(self.name_label)
         row1.addStretch()
         total = info.get('total_size', -1)
