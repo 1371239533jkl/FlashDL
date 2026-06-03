@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""视频播放器标签页 - 视频显示区域、播放控制条、播放列表"""
+"""视频播放器标签页 — mpv 引擎 + 内嵌全屏控制"""
 
 import os
 from PyQt6.QtCore import Qt, QTimer, QEvent, QPoint
@@ -8,14 +8,11 @@ from PyQt6.QtWidgets import (
     QSlider, QComboBox, QFileDialog, QListWidget, QListWidgetItem,
     QSplitter, QFrame, QMenu
 )
-from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QIcon
 
 import config
-from player.video_player import VideoPlayer
+from player.mpv_player import MpvPlayer
 from player.playlist_manager import PlaylistManager
-from player.subtitle_manager import SubtitleManager
-from player.subtitle_widget import SubtitleWidget
 from utils.format_utils import format_time_ms
 from utils.settings import get as get_setting, set_value as set_setting
 
@@ -27,23 +24,24 @@ class PlayerTab(QWidget):
         super().__init__()
         self._is_seeking = False
         self._is_fullscreen = False
-        self._controls_visible = True
         self._mouse_hide_timer = QTimer()
         self._mouse_hide_timer.setSingleShot(True)
         self._mouse_hide_timer.timeout.connect(self._auto_hide_controls)
-        # 单击Timer（复用，避免每次点击都创建新Timer导致内存泄漏）
         self._click_timer = QTimer()
         self._click_timer.setSingleShot(True)
         self._click_timer.timeout.connect(self._toggle_play)
         self.playlist = PlaylistManager()
         self.playlist.load()
-        self.subtitle_manager = SubtitleManager()
         self._setup_ui()
         self._connect_signals()
-        # 恢复播放列表后在 UI 中显示
         self._refresh_playlist_ui()
-        # 安装事件过滤器
-        self.video_widget.installEventFilter(self)
+        self.video_container.installEventFilter(self)
+        # 延迟连接全屏控制信号（等 player 创建好）
+        QTimer.singleShot(0, self._wire_fs_controls)
+
+    # ════════════════════════════════════════
+    #  UI 构建
+    # ════════════════════════════════════════
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -58,183 +56,153 @@ class PlayerTab(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        # 视频显示区域
-        self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(300)
-        self.video_widget.setStyleSheet('background-color: #000000;')
-        self.video_widget.setMouseTracking(True)
-        left_layout.addWidget(self.video_widget, 1)
-
-        # 全屏覆盖控制条（独立透明窗口）
-        self.fullscreen_controls = _FullscreenControlsOverlay(self)
-
-        # 字幕覆盖窗口（独立透明窗口，跟踪视频区域位置）
-        self.subtitle_widget = SubtitleWidget(self.video_widget)
+        # 视频容器（mpv 渲染到此 HWND）
+        self.video_container = QFrame()
+        self.video_container.setMinimumHeight(300)
+        self.video_container.setStyleSheet('background-color: #000000;')
+        self.video_container.setMouseTracking(True)
+        self.video_container.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+        left_layout.addWidget(self.video_container, 1)
 
         # 播放器实例
-        self.player = VideoPlayer(self.video_widget)
+        self.player = MpvPlayer(self.video_container)
 
-        # 控制条
-        controls = self._create_controls()
-        left_layout.addWidget(controls)
-
+        # 主控制条
+        left_layout.addWidget(self._create_controls())
         splitter.addWidget(left_panel)
 
-        # 右侧: 播放列表
-        right_panel = self._create_playlist_panel()
-        splitter.addWidget(right_panel)
-
+        # 右侧播放列表
+        splitter.addWidget(self._create_playlist_panel())
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([750, 250])
-
         layout.addWidget(splitter)
 
-    def _create_controls(self) -> QWidget:
-        """创建播放控制条（PotPlayer风格两行布局）"""
-        controls = QFrame()
-        controls.setObjectName('PlayerControls')
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(12, 6, 12, 8)
-        controls_layout.setSpacing(6)
+        # 全屏控制条（内嵌在 video_container 里，默认隐藏）
+        self._fs_overlay = self._create_fs_overlay()
 
-        # ======== 第一行：进度条 + 时间 ========
-        seek_row = QHBoxLayout()
+    def _create_controls(self) -> QWidget:
+        ctrl = QFrame()
+        ctrl.setObjectName('PlayerControls')
+        vl = QVBoxLayout(ctrl)
+        vl.setContentsMargins(12, 6, 12, 8)
+        vl.setSpacing(6)
+
+        # 进度条行
+        sr = QHBoxLayout()
         self.time_current = QLabel('00:00')
         self.time_current.setObjectName('SecondaryLabel')
         self.time_current.setFixedWidth(50)
-        seek_row.addWidget(self.time_current)
+        sr.addWidget(self.time_current)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 0)
         self.seek_slider.sliderPressed.connect(self._on_seek_start)
         self.seek_slider.sliderReleased.connect(self._on_seek_end)
         self.seek_slider.sliderMoved.connect(self._on_seek_moved)
-        seek_row.addWidget(self.seek_slider)
+        sr.addWidget(self.seek_slider)
 
         self.time_total = QLabel('00:00')
         self.time_total.setObjectName('SecondaryLabel')
         self.time_total.setFixedWidth(50)
         self.time_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        seek_row.addWidget(self.time_total)
-        controls_layout.addLayout(seek_row)
+        sr.addWidget(self.time_total)
+        vl.addLayout(sr)
 
-        # ======== 第二行：控制按钮 + 功能按钮 ========
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(4)
-
-        # 播放控制按钮（居中靠左）
-        ctrl_style = 'font-size: 16px; padding: 2px;'
+        # 按钮行
+        br = QHBoxLayout()
+        br.setSpacing(4)
+        cs = 'font-size: 16px; padding: 2px;'
 
         self.btn_prev = QPushButton('⏮')
-        self.btn_prev.setFixedSize(38, 34)
-        self.btn_prev.setStyleSheet(ctrl_style)
-        self.btn_prev.setToolTip('上一个')
-        self.btn_prev.clicked.connect(self._play_previous)
-        btn_row.addWidget(self.btn_prev)
+        self.btn_prev.setFixedSize(38, 34); self.btn_prev.setStyleSheet(cs)
+        self.btn_prev.setToolTip('上一个'); self.btn_prev.clicked.connect(self._play_previous)
+        br.addWidget(self.btn_prev)
 
-        btn_backward = QPushButton('⏪')
-        btn_backward.setFixedSize(38, 34)
-        btn_backward.setStyleSheet(ctrl_style)
-        btn_backward.setToolTip('快退 10 秒')
-        btn_backward.clicked.connect(lambda: self._skip(-10000))
-        btn_row.addWidget(btn_backward)
+        bw = QPushButton('⏪')
+        bw.setFixedSize(38, 34); bw.setStyleSheet(cs)
+        bw.setToolTip('快退 10 秒'); bw.clicked.connect(lambda: self._skip(-10000))
+        br.addWidget(bw)
 
         self.btn_play = QPushButton('▶')
-        self.btn_play.setFixedSize(46, 38)
-        self.btn_play.setStyleSheet(ctrl_style)
-        self.btn_play.setObjectName('PrimaryBtn')
-        self.btn_play.clicked.connect(self._toggle_play)
-        btn_row.addWidget(self.btn_play)
+        self.btn_play.setFixedSize(46, 38); self.btn_play.setStyleSheet(cs)
+        self.btn_play.setObjectName('PrimaryBtn'); self.btn_play.clicked.connect(self._toggle_play)
+        br.addWidget(self.btn_play)
 
-        btn_forward = QPushButton('⏩')
-        btn_forward.setFixedSize(38, 34)
-        btn_forward.setStyleSheet(ctrl_style)
-        btn_forward.setToolTip('快进 10 秒')
-        btn_forward.clicked.connect(lambda: self._skip(10000))
-        btn_row.addWidget(btn_forward)
+        fw = QPushButton('⏩')
+        fw.setFixedSize(38, 34); fw.setStyleSheet(cs)
+        fw.setToolTip('快进 10 秒'); fw.clicked.connect(lambda: self._skip(10000))
+        br.addWidget(fw)
 
         self.btn_next = QPushButton('⏭')
-        self.btn_next.setFixedSize(38, 34)
-        self.btn_next.setStyleSheet(ctrl_style)
-        self.btn_next.setToolTip('下一个')
-        self.btn_next.clicked.connect(self._play_next)
-        btn_row.addWidget(self.btn_next)
+        self.btn_next.setFixedSize(38, 34); self.btn_next.setStyleSheet(cs)
+        self.btn_next.setToolTip('下一个'); self.btn_next.clicked.connect(self._play_next)
+        br.addWidget(self.btn_next)
 
-        btn_row.addStretch(1)
+        br.addStretch(1)
 
-        # ======== 右侧功能按钮 ========
-        # 音量（点击切换静音）
+        # 音量
         self.btn_volume = QLabel('🔊')
         self.btn_volume.setObjectName('SecondaryLabel')
         self.btn_volume.setFixedWidth(28)
         self.btn_volume.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_volume.setToolTip('点击静音')
         self.btn_volume.mousePressEvent = lambda e: self._toggle_mute()
-        btn_row.addWidget(self.btn_volume)
+        br.addWidget(self.btn_volume)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(config.DEFAULT_VOLUME)
         self.volume_slider.setFixedWidth(80)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        btn_row.addWidget(self.volume_slider)
+        br.addWidget(self.volume_slider)
         self._update_volume_icon(config.DEFAULT_VOLUME)
 
-        btn_row.addSpacing(8)
+        br.addSpacing(8)
 
-        # 倍速（显示 1.0x）
+        # 倍速
         self.speed_combo = QComboBox()
         for rate in config.PLAYBACK_RATES:
             self.speed_combo.addItem(f'{rate}x', rate)
         self.speed_combo.setCurrentText('1.0x')
         self.speed_combo.setFixedWidth(66)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
-        btn_row.addWidget(self.speed_combo)
+        br.addWidget(self.speed_combo)
+        br.addSpacing(4)
 
-        btn_row.addSpacing(4)
-
-        # 字幕（点击弹出菜单）
+        # 字幕
         self.btn_subtitle = QPushButton('字幕')
         self.btn_subtitle.setFixedWidth(56)
         self.btn_subtitle.setToolTip('加载字幕文件')
         self.btn_subtitle.clicked.connect(self._on_subtitle_menu)
-        btn_row.addWidget(self.btn_subtitle)
-
-        # 字幕偏移状态（小标签，旁边显示）
+        br.addWidget(self.btn_subtitle)
         self.sub_delay_label = QLabel()
         self.sub_delay_label.setObjectName('SecondaryLabel')
         self.sub_delay_label.setFixedWidth(42)
         self.sub_delay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        btn_row.addWidget(self.sub_delay_label)
+        br.addWidget(self.sub_delay_label)
+        br.addSpacing(4)
 
-        btn_row.addSpacing(4)
+        # 全屏按钮
+        fs_btn = QPushButton()
+        fs_btn.setFixedSize(38, 34)
+        fs_btn.setToolTip('全屏')
+        fs_btn.setIcon(self._make_fullscreen_icon())
+        fs_btn.setIconSize(fs_btn.size() * 0.6)
+        fs_btn.clicked.connect(self._toggle_fullscreen)
+        br.addWidget(fs_btn)
 
-        # 全屏（画出来的图标按钮）
-        btn_fullscreen = QPushButton()
-        btn_fullscreen.setFixedSize(38, 34)
-        btn_fullscreen.setToolTip('全屏')
-        btn_fullscreen.setIcon(self._make_fullscreen_icon())
-        btn_fullscreen.setIconSize(btn_fullscreen.size() * 0.6)
-        btn_fullscreen.clicked.connect(self._toggle_fullscreen)
-        btn_row.addWidget(btn_fullscreen)
-
-        controls_layout.addLayout(btn_row)
-        return controls
+        vl.addLayout(br)
+        return ctrl
 
     def _create_playlist_panel(self) -> QWidget:
-        """创建播放列表面板"""
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        header = QHBoxLayout()
-        label = QLabel('播放列表')
-        label.setStyleSheet('font-weight: bold; font-size: 14px;')
-        header.addWidget(label)
-        header.addStretch()
-        layout.addLayout(header)
-
+        lo = QVBoxLayout(panel)
+        lo.setContentsMargins(8, 8, 8, 8)
+        lo.setSpacing(6)
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel('播放列表'))
+        hdr.addStretch()
+        lo.addLayout(hdr)
         self.playlist_widget = QListWidget()
         self.playlist_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.playlist_widget.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -242,45 +210,156 @@ class PlayerTab(QWidget):
         self.playlist_widget.itemDoubleClicked.connect(self._on_playlist_item_clicked)
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self._on_playlist_context_menu)
-        # 拖拽排序后同步 PlaylistManager
         self.playlist_widget.model().layoutChanged.connect(self._on_playlist_reordered)
-        layout.addWidget(self.playlist_widget)
-
-        btn_row = QHBoxLayout()
-        btn_add = QPushButton('添加文件')
-        btn_add.clicked.connect(self._add_files_to_playlist)
-        btn_row.addWidget(btn_add)
-        btn_clear = QPushButton('清空列表')
-        btn_clear.clicked.connect(self._clear_playlist)
-        btn_row.addWidget(btn_clear)
-        layout.addLayout(btn_row)
-
+        lo.addWidget(self.playlist_widget)
+        br = QHBoxLayout()
+        add = QPushButton('添加文件'); add.clicked.connect(self._add_files_to_playlist)
+        br.addWidget(add)
+        clr = QPushButton('清空列表'); clr.clicked.connect(self._clear_playlist)
+        br.addWidget(clr)
+        lo.addLayout(br)
         return panel
 
-    def _connect_signals(self):
-        self.player.player.positionChanged.connect(self._on_position_changed)
-        self.player.player.durationChanged.connect(self._on_duration_changed)
-        self.player.player.playbackStateChanged.connect(self._on_state_changed)
-        self.player.player.mediaStatusChanged.connect(self._on_media_status_changed)
+    # ════════════════════════════════════════
+    #  内嵌全屏控制条
+    # ════════════════════════════════════════
 
-    # === 播放控制 ===
-    def play_file(self, file_path: str):
-        """播放指定文件"""
-        if not os.path.exists(file_path):
+    def _create_fs_overlay(self) -> QFrame:
+        """全屏时显示在 video_container 底部的半透明控制条"""
+        frame = QFrame(self.video_container)
+        frame.setObjectName('FSOverlay')
+        frame.setFixedHeight(80)
+        frame.setStyleSheet("""
+            #FSOverlay {
+                background-color: rgba(0, 0, 0, 210);
+                border-radius: 0px;
+            }
+            QLabel { color: #FFFFFF; font-size: 12px; }
+            QPushButton {
+                color: #FFFFFF; background: transparent;
+                border: 1px solid rgba(255,255,255,80);
+                border-radius: 4px; font-size: 14px; padding: 2px 8px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,40); }
+            QSlider::groove:horizontal {
+                height: 6px; background: rgba(255,255,255,60); border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                width: 14px; height: 14px; margin: -4px 0;
+                background: #FFFFFF; border-radius: 7px;
+            }
+            QSlider::sub-page:horizontal { background: #4FC3F7; border-radius: 3px; }
+        """)
+        vl = QVBoxLayout(frame)
+        vl.setContentsMargins(16, 8, 16, 8)
+        vl.setSpacing(6)
+
+        # 进度行
+        sr = QHBoxLayout()
+        self._f_time_cur = QLabel('00:00'); self._f_time_cur.setFixedWidth(50)
+        sr.addWidget(self._f_time_cur)
+        self._f_seek = QSlider(Qt.Orientation.Horizontal)
+        self._f_seek.setRange(0, 0)
+        self._f_seek.sliderPressed.connect(lambda: setattr(self, '_is_seeking', True))
+        self._f_seek.sliderReleased.connect(self._fs_seek_end)
+        self._f_seek.sliderMoved.connect(lambda v: self._f_time_cur.setText(format_time_ms(v)))
+        sr.addWidget(self._f_seek)
+        self._f_time_tot = QLabel('00:00'); self._f_time_tot.setFixedWidth(50)
+        self._f_time_tot.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sr.addWidget(self._f_time_tot)
+        vl.addLayout(sr)
+
+        # 按钮行
+        br = QHBoxLayout()
+        fs = 'font-size: 16px; font-family: "Segoe UI Symbol", "Microsoft YaHei UI", sans-serif;'
+        btn_prev = QPushButton('⏮'); btn_prev.setFixedSize(42, 32)
+        btn_prev.setStyleSheet(fs); btn_prev.clicked.connect(self._play_previous)
+        br.addWidget(btn_prev)
+        btn_bw = QPushButton('⏪'); btn_bw.setFixedSize(42, 32)
+        btn_bw.setStyleSheet(fs); btn_bw.clicked.connect(lambda: self._skip(-10000))
+        br.addWidget(btn_bw)
+        self._f_btn_play = QPushButton('▶'); self._f_btn_play.setFixedSize(48, 34)
+        self._f_btn_play.setStyleSheet(fs); self._f_btn_play.clicked.connect(self._toggle_play)
+        br.addWidget(self._f_btn_play)
+        btn_fw = QPushButton('⏩'); btn_fw.setFixedSize(42, 32)
+        btn_fw.setStyleSheet(fs); btn_fw.clicked.connect(lambda: self._skip(10000))
+        br.addWidget(btn_fw)
+        btn_next = QPushButton('⏭'); btn_next.setFixedSize(42, 32)
+        btn_next.setStyleSheet(fs); btn_next.clicked.connect(self._play_next)
+        br.addWidget(btn_next)
+        br.addSpacing(30)
+        br.addWidget(QLabel('音量'))
+        self._f_vol = QSlider(Qt.Orientation.Horizontal)
+        self._f_vol.setRange(0, 100); self._f_vol.setFixedWidth(100)
+        self._f_vol.valueChanged.connect(lambda v: self._on_volume_changed(v))
+        br.addWidget(self._f_vol)
+        br.addStretch()
+        exit_btn = QPushButton()
+        exit_btn.setFixedSize(36, 28); exit_btn.setToolTip('退出全屏')
+        exit_btn.setIcon(self._make_fullscreen_icon())
+        exit_btn.setIconSize(exit_btn.size() * 0.6)
+        exit_btn.clicked.connect(self._exit_fullscreen)
+        br.addWidget(exit_btn)
+        vl.addLayout(br)
+
+        frame.hide()
+        return frame
+
+    def _wire_fs_controls(self):
+        """连接全屏定时器刷新（延迟到 player 创建后）"""
+        self._fs_sync = QTimer(self)
+        self._fs_sync.setInterval(200)
+        self._fs_sync.timeout.connect(self._fs_refresh)
+        self._fs_hide_timer = QTimer(self)
+        self._fs_hide_timer.setSingleShot(True)
+        self._fs_hide_timer.timeout.connect(self._fs_auto_hide)
+
+    def _fs_refresh(self):
+        """全屏时同步进度和状态"""
+        if not self._is_fullscreen or self._is_seeking:
             return
-        # 保存当前播放进度
+        self._f_seek.setRange(0, self.player.duration)
+        self._f_seek.setValue(self.player.position)
+        self._f_time_cur.setText(format_time_ms(self.player.position))
+        self._f_time_tot.setText(format_time_ms(self.player.duration))
+        self._f_btn_play.setText('⏸' if self.player.is_playing else '▶')
+        self._f_vol.setValue(self.volume_slider.value())
+
+    def _fs_seek_end(self):
+        self._is_seeking = False
+        self.player.seek(self._f_seek.value())
+
+    def _fs_auto_hide(self):
+        if self._is_fullscreen and self.player.is_playing:
+            self._fs_overlay.hide()
+            self.video_container.setCursor(Qt.CursorShape.BlankCursor)
+
+    # ════════════════════════════════════════
+    #  信号
+    # ════════════════════════════════════════
+
+    def _connect_signals(self):
+        self.player.position_changed.connect(self._on_position_changed)
+        self.player.duration_changed.connect(self._on_duration_changed)
+        self.player.playback_state_changed.connect(self._on_state_changed)
+        self.player.media_status_changed.connect(self._on_media_status_changed)
+
+    # ════════════════════════════════════════
+    #  播放控制
+    # ════════════════════════════════════════
+
+    def play_file(self, path: str):
+        if not os.path.exists(path):
+            return
         self._save_playback_progress()
-        # 添加到播放列表
-        self.playlist.add_file(file_path)
-        idx = self.playlist.items.index(file_path)
+        self.playlist.add_file(path)
+        idx = self.playlist.items.index(path)
         self.playlist.set_current(idx)
         self._refresh_playlist_ui()
-        self.player.load(file_path)
+        self.player.load(path)
         self.player.play()
-        # 自动检测同名字幕
-        self._auto_load_subtitle(file_path)
-        # 恢复播放进度
-        self._restore_playback_progress(file_path)
+        self._restore_playback_progress(path)
+        self._restore_subtitle_offset(path)
 
     def _toggle_play(self):
         if self.player.current_file:
@@ -289,57 +368,53 @@ class PlayerTab(QWidget):
             self.player.load(self.playlist.current_file)
             self.player.play()
 
-    def _skip(self, ms: int):
+    def _skip(self, ms):
         pos = self.player.position + ms
-        pos = max(0, min(pos, self.player.duration))
-        self.player.seek(pos)
+        self.player.seek(max(0, min(pos, self.player.duration)))
 
     def _play_next(self):
         self._save_playback_progress()
-        path = self.playlist.next()
-        if path:
+        p = self.playlist.next()
+        if p:
             self._refresh_playlist_ui()
-            self.player.load(path)
-            self.player.play()
-            self._auto_load_subtitle(path)
-            self._restore_playback_progress(path)
+            self.player.load(p); self.player.play()
+            self._restore_playback_progress(p)
 
     def _play_previous(self):
         self._save_playback_progress()
-        path = self.playlist.previous()
-        if path:
+        p = self.playlist.previous()
+        if p:
             self._refresh_playlist_ui()
-            self.player.load(path)
-            self.player.play()
-            self._auto_load_subtitle(path)
-            self._restore_playback_progress(path)
+            self.player.load(p); self.player.play()
+            self._restore_playback_progress(p)
 
-    def _on_volume_changed(self, value):
-        self.player.set_volume(value)
-        self._update_volume_icon(value)
+    def _on_volume_changed(self, v):
+        self.player.set_volume(v)
+        self.volume_slider.blockSignals(True)
+        self.volume_slider.setValue(v)
+        self.volume_slider.blockSignals(False)
+        self._update_volume_icon(v)
 
     def _toggle_mute(self):
-        """切换静音"""
         if self.volume_slider.value() == 0:
-            last = getattr(self, '_last_volume', 70)
-            self.volume_slider.setValue(last if last > 0 else 70)
+            lv = getattr(self, '_last_volume', 70)
+            self.volume_slider.setValue(lv if lv > 0 else 70)
         else:
             self._last_volume = self.volume_slider.value()
             self.volume_slider.setValue(0)
 
-    def _update_volume_icon(self, value: int):
-        """更新音量图标文字"""
-        if value == 0:
-            self.btn_volume.setText('🔇')
-            self.btn_volume.setToolTip('取消静音')
-        else:
-            self.btn_volume.setText('🔊')
-            self.btn_volume.setToolTip('点击静音')
+    def _update_volume_icon(self, v):
+        self.btn_volume.setText('🔇' if v == 0 else '🔊')
+        self.btn_volume.setToolTip('取消静音' if v == 0 else '点击静音')
 
-    def _on_speed_changed(self, index):
-        rate = self.speed_combo.itemData(index)
-        if rate:
-            self.player.set_playback_rate(rate)
+    def _on_speed_changed(self, idx):
+        r = self.speed_combo.itemData(idx)
+        if r:
+            self.player.set_playback_rate(r)
+
+    # ════════════════════════════════════════
+    #  全屏
+    # ════════════════════════════════════════
 
     def _toggle_fullscreen(self):
         if self._is_fullscreen:
@@ -349,94 +424,95 @@ class PlayerTab(QWidget):
 
     def _enter_fullscreen(self):
         self._is_fullscreen = True
-        self.video_widget.setFullScreen(True)
-        self.fullscreen_controls.attach(self.video_widget)
-        self._mouse_hide_timer.start(3000)
+        top = self.window()
+        self._fs_was_max = top.isMaximized()
+        top.showFullScreen()
+        # 显示内嵌控制条
+        self._fs_show()
+        self._fs_sync.start()
 
     def _exit_fullscreen(self):
         self._is_fullscreen = False
-        self.video_widget.setFullScreen(False)
-        self.fullscreen_controls.detach()
-        self._mouse_hide_timer.stop()
-        self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
+        top = self.window()
+        if self._fs_was_max:
+            top.showMaximized()
+        else:
+            top.showNormal()
+        self._fs_overlay.hide()
+        self._fs_sync.stop()
+        self.video_container.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _auto_hide_controls(self):
-        """全屏时自动隐藏控制条和鼠标"""
         if self._is_fullscreen and self.player.is_playing:
-            self.fullscreen_controls.hide()
-            self.video_widget.setCursor(Qt.CursorShape.BlankCursor)
+            self._fs_overlay.hide()
+            self.video_container.setCursor(Qt.CursorShape.BlankCursor)
 
-    def _show_fullscreen_controls(self):
-        """显示全屏控制条并重置自动隐藏计时器"""
-        self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
-        self.fullscreen_controls.show()
-        self._mouse_hide_timer.start(3000)
+    def _fs_show(self):
+        """全屏控制条定位到 video_container 底部并显示"""
+        self._fs_overlay.setFixedWidth(self.video_container.width())
+        self._fs_overlay.move(0, self.video_container.height() - 80)
+        self._fs_overlay.raise_()
+        self._fs_overlay.show()
+        self.video_container.setCursor(Qt.CursorShape.ArrowCursor)
+        # 3 秒后自动隐藏
+        self._fs_hide_timer.start(3000)
+
+    # ════════════════════════════════════════
+    #  事件过滤
+    # ════════════════════════════════════════
 
     def _on_video_double_click(self, event):
         self._toggle_fullscreen()
 
     def eventFilter(self, obj, event):
-        """拦截全屏状态下的键盘和鼠标事件"""
-        if obj is not self.video_widget:
+        if obj is not self.video_container:
             return super().eventFilter(obj, event)
 
         etype = event.type()
 
-        # 键盘事件
         if etype == QEvent.Type.KeyPress:
             key = event.key()
             if key == Qt.Key.Key_Escape and self._is_fullscreen:
-                self._exit_fullscreen()
-                return True
+                self._exit_fullscreen(); return True
             if key == Qt.Key.Key_Space:
-                self._toggle_play()
-                return True
+                self._toggle_play(); return True
             if key == Qt.Key.Key_Left:
                 self._skip(-10000)
-                if self._is_fullscreen:
-                    self._show_fullscreen_controls()
+                if self._is_fullscreen: self._fs_show()
                 return True
             if key == Qt.Key.Key_Right:
                 self._skip(10000)
-                if self._is_fullscreen:
-                    self._show_fullscreen_controls()
+                if self._is_fullscreen: self._fs_show()
                 return True
             if key == Qt.Key.Key_Up:
-                vol = min(100, self.volume_slider.value() + 5)
-                self.volume_slider.setValue(vol)
-                if self._is_fullscreen:
-                    self._show_fullscreen_controls()
+                self._on_volume_changed(min(100, self.volume_slider.value() + 5))
+                if self._is_fullscreen: self._fs_show()
                 return True
             if key == Qt.Key.Key_Down:
-                vol = max(0, self.volume_slider.value() - 5)
-                self.volume_slider.setValue(vol)
-                if self._is_fullscreen:
-                    self._show_fullscreen_controls()
+                self._on_volume_changed(max(0, self.volume_slider.value() - 5))
+                if self._is_fullscreen: self._fs_show()
                 return True
-            if key == Qt.Key.Key_F or key == Qt.Key.Key_F11:
-                self._toggle_fullscreen()
-                return True
+            if key in (Qt.Key.Key_F, Qt.Key.Key_F11):
+                self._toggle_fullscreen(); return True
 
-        # 鼠标双击 → 切换全屏（必须在单击之前处理）
         if etype == QEvent.Type.MouseButtonDblClick:
             self._click_timer.stop()
             self._on_video_double_click(event)
             return True
 
-        # 单击暂停/播放（延迟执行，等待是否双击）
         if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-            # 复用_init中创建的_click_timer，只需重启即可
             self._click_timer.start(300)
             return True
 
-        # 鼠标移动 → 全屏时显示控制条
         if etype == QEvent.Type.MouseMove and self._is_fullscreen:
-            self._show_fullscreen_controls()
-            return False
+            self._fs_show()
 
         return super().eventFilter(obj, event)
 
-    # === 进度条 ===
+    # ════════════════════════════════════════
+    #  进度 / 状态回调
+    # ════════════════════════════════════════
+
     def _on_seek_start(self):
         self._is_seeking = True
 
@@ -445,41 +521,40 @@ class PlayerTab(QWidget):
         self.player.seek(self.seek_slider.value())
         self._save_playback_progress()
 
-    def _on_seek_moved(self, value):
-        self.time_current.setText(format_time_ms(value))
+    def _on_seek_moved(self, v):
+        self.time_current.setText(format_time_ms(v))
 
-    def _on_position_changed(self, position):
+    def _on_position_changed(self, pos):
         if not self._is_seeking:
-            self.seek_slider.setValue(position)
-            self.time_current.setText(format_time_ms(position))
-            self._update_subtitle(position)
+            self.seek_slider.setValue(pos)
+            self.time_current.setText(format_time_ms(pos))
 
-    def _on_duration_changed(self, duration):
-        self.seek_slider.setRange(0, duration)
-        self.time_total.setText(format_time_ms(duration))
+    def _on_duration_changed(self, dur):
+        self.seek_slider.setRange(0, dur)
+        self.time_total.setText(format_time_ms(dur))
 
     def _on_state_changed(self, state):
-        if state == QMediaPlayer.PlaybackState.PlayingState:
+        if state == MpvPlayer.PLAYING:
             self.btn_play.setText('⏸')
-        elif state == QMediaPlayer.PlaybackState.PausedState:
+        elif state == MpvPlayer.PAUSED:
             self.btn_play.setText('▶')
-            # 暂停时保存进度
             self._save_playback_progress()
-        else:  # StoppedState
+        else:
             self.btn_play.setText('▶')
 
     def _on_media_status_changed(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            # 自动播放下一个
+        if status == MpvPlayer.END_OF_MEDIA:
             if self.playlist.has_next():
                 self._play_next()
-        elif status == QMediaPlayer.MediaStatus.LoadedMedia:
-            # 视频加载完毕，延迟100ms后恢复播放进度（给Qt时间处理完内部状态）
+        elif status == MpvPlayer.LOADED:
             path = self.player.current_file
             if path:
                 QTimer.singleShot(100, lambda p=path: self._restore_playback_progress(p))
 
-    # === 播放列表UI ===
+    # ════════════════════════════════════════
+    #  播放列表
+    # ════════════════════════════════════════
+
     def _add_files_to_playlist(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, '选择视频文件', '',
@@ -494,49 +569,43 @@ class PlayerTab(QWidget):
         self.playlist_widget.clear()
         self.player.stop()
 
-    def _on_playlist_item_clicked(self, item: QListWidgetItem):
+    def _on_playlist_item_clicked(self, item):
         row = self.playlist_widget.row(item)
         path = self.playlist.set_current(row)
         if path:
             self._refresh_playlist_ui()
-            self.player.load(path)
-            self.player.play()
-            self._auto_load_subtitle(path)
+            self.player.load(path); self.player.play()
 
     def _on_playlist_context_menu(self, pos):
-        """播放列表右键菜单"""
         item = self.playlist_widget.itemAt(pos)
         if not item:
             return
         menu = QMenu(self)
-        remove_action = menu.addAction('删除')
-        clear_action = menu.addAction('清空列表')
+        rm = menu.addAction('删除')
+        clr = menu.addAction('清空列表')
         action = menu.exec(self.playlist_widget.mapToGlobal(pos))
-        if action == remove_action:
+        if action == rm:
             row = self.playlist_widget.row(item)
             self.playlist.remove_file(row)
             self._refresh_playlist_ui()
             if row == self.playlist.current_index:
                 self.player.stop()
-        elif action == clear_action:
+        elif action == clr:
             self._clear_playlist()
 
     def _on_playlist_reordered(self):
-        """拖拽排序后同步 PlaylistManager 的内部列表"""
         new_items = []
         for i in range(self.playlist_widget.count()):
             path = self.playlist_widget.item(i).data(Qt.ItemDataRole.UserRole)
             if path:
                 new_items.append(path)
-
         if len(new_items) != len(self.playlist._items):
-            return  # 数据不完整，跳过
-
-        current_path = self.playlist.current_file
+            return
+        cur = self.playlist.current_file
         self.playlist._items.clear()
         self.playlist._items.extend(new_items)
-        if current_path in new_items:
-            self.playlist._current_index = new_items.index(current_path)
+        if cur in new_items:
+            self.playlist._current_index = new_items.index(cur)
 
     def _refresh_playlist_ui(self):
         self.playlist.save()
@@ -550,9 +619,7 @@ class PlayerTab(QWidget):
             self.playlist_widget.addItem(item)
 
     @staticmethod
-    def _make_fullscreen_icon() -> 'QIcon':
-        """绘制全屏图标（一个矩形四角带小勾，不受字体影响）"""
-        from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+    def _make_fullscreen_icon() -> QIcon:
         size = 20
         pix = QPixmap(size, size)
         pix.fill(Qt.GlobalColor.transparent)
@@ -560,386 +627,101 @@ class PlayerTab(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor('#CCCCCC'), 2)
         p.setPen(pen)
-        # 画四角短线（模拟全屏图标）
-        m = 3  # margin
-        s = 5  # short line length
-        # 左上角
-        p.drawLine(m, m, m + s, m)
-        p.drawLine(m, m, m, m + s)
-        # 右上角
-        p.drawLine(size - m - s, m, size - m, m)
-        p.drawLine(size - m, m, size - m, m + s)
-        # 左下角
-        p.drawLine(m, size - m - s, m, size - m)
-        p.drawLine(m, size - m, m + s, size - m)
-        # 右下角
-        p.drawLine(size - m - s, size - m, size - m, size - m)
-        p.drawLine(size - m, size - m - s, size - m, size - m)
+        m, s = 3, 5
+        p.drawLine(m, m, m + s, m); p.drawLine(m, m, m, m + s)
+        p.drawLine(size - m - s, m, size - m, m); p.drawLine(size - m, m, size - m, m + s)
+        p.drawLine(m, size - m - s, m, size - m); p.drawLine(m, size - m, m + s, size - m)
+        p.drawLine(size - m - s, size - m, size - m, size - m); p.drawLine(size - m, size - m - s, size - m, size - m)
         p.end()
-        from PyQt6.QtGui import QIcon
         return QIcon(pix)
 
-    def cleanup(self):
-        self._save_playback_progress()
-        self.subtitle_manager.clear()
-        self.subtitle_widget.cleanup()
-        self.fullscreen_controls.detach()
-        self.player.cleanup()
+    # ════════════════════════════════════════
+    #  字幕
+    # ════════════════════════════════════════
 
-    # === 播放进度记忆 ===
-
-    def _save_playback_progress(self):
-        """保存当前视频的播放进度"""
-        path = self.player.current_file
-        if not path or self.player.duration <= 0:
-            return
-        # 归一化路径（统一路径分隔符）
-        path = os.path.normpath(path)
-        progress_data = get_setting('playback_progress', {})
-        pos = self.player.position
-        # 只保存有意义的进度（超过10秒且不是末尾）
-        if pos > 10000 and pos < self.player.duration - 5000:
-            progress_data[path] = pos
-        elif path in progress_data:
-            # 视频已播完或接近末尾，清除进度记录
-            del progress_data[path]
-        set_setting('playback_progress', progress_data)
-
-    def _restore_playback_progress(self, file_path: str):
-        """恢复视频播放进度"""
-        progress_data = get_setting('playback_progress', {})
-        saved_pos = progress_data.get(os.path.normpath(file_path), 0)
-        if saved_pos > 0:
-            self.player.seek(saved_pos)
-
-    # === 字幕 ===
     def _on_subtitle_menu(self):
-        """字幕按钮点击：弹出菜单（添加字幕 + 延迟调节）"""
         menu = QMenu(self)
         menu.setStyleSheet('font-size: 12px; padding: 4px;')
-        
-        # 当前状态
-        if self.subtitle_manager.is_loaded:
-            offset = self.subtitle_manager.offset
-            if offset != 0:
-                off_text = f'当前偏移: {offset/1000:+.1f}s'
-            else:
-                off_text = '已同步'
-            menu.addAction(off_text).setEnabled(False)
+        delay = self.player.get_subtitle_delay()
+        if delay == 0:
+            menu.addAction('字幕已同步').setEnabled(False)
         else:
-            menu.addAction('未加载字幕').setEnabled(False)
-        
+            menu.addAction(f'偏移: {delay/1000:+.1f}s').setEnabled(False)
         menu.addSeparator()
-        
-        # 添加字幕文件
         menu.addAction('[添加字幕文件]', self._open_subtitle_dialog)
+        menu.addAction('[切换字幕轨道]', self._cycle_subtitle_track)
         menu.addSeparator()
-        
-        # 延迟调节
         menu.addAction('[提前 0.5s]', lambda: self._adjust_subtitle_offset(-500))
         menu.addAction('[延后 0.5s]', lambda: self._adjust_subtitle_offset(500))
-        
-        # 重置
-        if self.subtitle_manager.offset != 0:
+        if delay != 0:
             menu.addSeparator()
-            menu.addAction('[重置同步]', lambda: self._adjust_subtitle_offset(-self.subtitle_manager.offset))
-        
-        # 在按钮上方弹出
-        btn_pos = self.btn_subtitle.mapToGlobal(self.btn_subtitle.rect().bottomLeft())
-        menu.exec(btn_pos - QPoint(0, menu.sizeHint().height() + self.btn_subtitle.height()))
-    
+            menu.addAction('[重置同步]', lambda: self._adjust_subtitle_offset(-delay))
+        bp = self.btn_subtitle.mapToGlobal(self.btn_subtitle.rect().bottomLeft())
+        menu.exec(bp - QPoint(0, menu.sizeHint().height() + self.btn_subtitle.height()))
+
     def _open_subtitle_dialog(self):
-        """手动选择字幕文件"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, '选择字幕文件', '',
-            '字幕文件 (*.srt *.ass *.ssa *.vtt);;所有文件 (*)'
-        )
-        if file_path:
-            self._load_subtitle(file_path)
+        fp, _ = QFileDialog.getOpenFileName(
+            self, '选择字幕文件', '', '字幕文件 (*.srt *.ass *.ssa *.vtt);;所有文件 (*)')
+        if fp:
+            self.player.set_subtitle_file(fp)
+            self.btn_subtitle.setToolTip(f'已加载: {os.path.basename(fp)}')
 
-    def _load_subtitle(self, subtitle_path: str):
-        """加载字幕文件"""
-        success = self.subtitle_manager.load_subtitle(subtitle_path)
-        if success:
-            self.btn_subtitle.setText('字幕')
-            self.btn_subtitle.setToolTip(f'已加载: {os.path.basename(subtitle_path)}')
-            self._update_subtitle(self.player.position)
+    def _cycle_subtitle_track(self):
+        self.player.cycle_subtitle()
 
-    def _auto_load_subtitle(self, video_path: str):
-        """自动检测并加载同名字幕"""
-        self.subtitle_manager.clear()
-        self.subtitle_widget.clear()
-        self.btn_subtitle.setText('字幕')
-        self.btn_subtitle.setToolTip('加载字幕文件')
-        # 恢复该视频的字幕偏移量
-        self._restore_subtitle_offset(video_path)
-
-        if not config.SUBTITLE_AUTO_LOAD:
-            return
-        subtitle_path = self.subtitle_manager.auto_detect_subtitle(video_path)
-        if subtitle_path:
-            self._load_subtitle(subtitle_path)
-
-    def _update_subtitle(self, position_ms: int):
-        """根据播放位置更新字幕显示"""
-        if not self.subtitle_manager.is_loaded or not self.subtitle_manager.enabled:
-            return
-        subtitle = self.subtitle_manager.get_subtitle_at(position_ms)
-        if subtitle:
-            self.subtitle_widget.set_text(subtitle.text)
-        else:
-            self.subtitle_widget.clear()
-
-    # === 字幕延迟调节 ===
-
-    def _adjust_subtitle_offset(self, delta_ms: int):
-        """调整字幕时间偏移量"""
-        new_offset = self.subtitle_manager.offset + delta_ms
-        self.subtitle_manager.offset = new_offset
+    def _adjust_subtitle_offset(self, delta_ms):
+        new = self.player.get_subtitle_delay() + delta_ms
+        self.player.set_subtitle_delay(new)
         self._update_subtitle_delay_label()
-        # 立即刷新字幕
-        self._update_subtitle(self.player.position)
-        # 保存此视频的偏移量
         self._save_subtitle_offset()
 
     def _update_subtitle_delay_label(self):
-        """更新字幕延迟标签显示"""
-        offset = self.subtitle_manager.offset
-        if offset == 0:
-            self.sub_delay_label.setText('同步')
-        elif offset > 0:
-            self.sub_delay_label.setText(f'+{offset/1000:.1f}s')
-        else:
-            self.sub_delay_label.setText(f'{offset/1000:.1f}s')
+        o = self.player.get_subtitle_delay()
+        if o == 0:       self.sub_delay_label.setText('同步')
+        elif o > 0:      self.sub_delay_label.setText(f'+{o/1000:.1f}s')
+        else:            self.sub_delay_label.setText(f'{o/1000:.1f}s')
 
     def _save_subtitle_offset(self):
-        """保存当前视频的字幕偏移量"""
-        path = self.player.current_file
-        if not path:
-            return
-        path = os.path.normpath(path)
-        offset_data = get_setting('subtitle_offsets', {})
-        offset = self.subtitle_manager.offset
-        if offset == 0:
-            offset_data.pop(path, None)
-        else:
-            offset_data[path] = offset
-        set_setting('subtitle_offsets', offset_data)
+        p = self.player.current_file
+        if not p: return
+        data = get_setting('subtitle_offsets', {})
+        o = self.player.get_subtitle_delay()
+        if o == 0: data.pop(os.path.normpath(p), None)
+        else:      data[os.path.normpath(p)] = o
+        set_setting('subtitle_offsets', data)
 
-    def _restore_subtitle_offset(self, file_path: str):
-        """恢复视频的字幕偏移量"""
-        offset_data = get_setting('subtitle_offsets', {})
-        saved_offset = offset_data.get(os.path.normpath(file_path), 0)
-        self.subtitle_manager.offset = saved_offset
+    def _restore_subtitle_offset(self, fp):
+        data = get_setting('subtitle_offsets', {})
+        saved = data.get(os.path.normpath(fp), 0)
+        self.player.set_subtitle_delay(saved)
         self._update_subtitle_delay_label()
 
+    # ════════════════════════════════════════
+    #  进度记忆
+    # ════════════════════════════════════════
 
-class _FullscreenControlsOverlay(QWidget):
-    """
-    全屏时的控制条覆盖窗口。
-    独立的无边框半透明窗口，悬浮在全屏视频底部，
-    包含进度条、播放按钮、时间和音量控制。
-    """
+    def _save_playback_progress(self):
+        p = self.player.current_file
+        if not p or self.player.duration <= 0: return
+        data = get_setting('playback_progress', {})
+        pos = self.player.position
+        if 10000 < pos < self.player.duration - 5000:
+            data[os.path.normpath(p)] = pos
+        else:
+            data.pop(os.path.normpath(p), None)
+        set_setting('playback_progress', data)
 
-    def __init__(self, player_tab: 'PlayerTab'):
-        super().__init__(None)
-        self._player_tab = player_tab
-        self._attached = False
-        self._is_seeking = False
+    def _restore_playback_progress(self, fp):
+        data = get_setting('playback_progress', {})
+        saved = data.get(os.path.normpath(fp), 0)
+        if saved > 0:
+            self.player.seek(saved)
 
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    # ════════════════════════════════════════
+    #  生命周期
+    # ════════════════════════════════════════
 
-        self._build_ui()
-
-        # 跟踪定时器
-        self._track_timer = QTimer(self)
-        self._track_timer.setInterval(50)
-        self._track_timer.timeout.connect(self._update_position)
-
-        # 同步播放器进度
-        self._sync_timer = QTimer(self)
-        self._sync_timer.setInterval(200)
-        self._sync_timer.timeout.connect(self._sync_from_player)
-
-        self.hide()
-
-    def _build_ui(self):
-        self.setFixedHeight(80)
-
-        container = QWidget(self)
-        container.setObjectName('FSControlsContainer')
-        container.setStyleSheet("""
-            #FSControlsContainer {
-                background-color: rgba(0, 0, 0, 200);
-                border-radius: 0px;
-            }
-            QLabel { color: #FFFFFF; font-size: 12px; }
-            QPushButton {
-                color: #FFFFFF; background: transparent;
-                border: 1px solid rgba(255,255,255,80);
-                border-radius: 4px; font-size: 14px;
-                padding: 2px 8px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,40); }
-            QSlider::groove:horizontal {
-                height: 6px; background: rgba(255,255,255,60); border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                width: 14px; height: 14px; margin: -4px 0;
-                background: #FFFFFF; border-radius: 7px;
-            }
-            QSlider::sub-page:horizontal { background: #4FC3F7; border-radius: 3px; }
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(container)
-
-        main_layout = QVBoxLayout(container)
-        main_layout.setContentsMargins(16, 8, 16, 8)
-        main_layout.setSpacing(4)
-
-        # 进度条行
-        seek_row = QHBoxLayout()
-        self._time_current = QLabel('00:00')
-        self._time_current.setFixedWidth(50)
-        seek_row.addWidget(self._time_current)
-
-        self._seek_slider = QSlider(Qt.Orientation.Horizontal)
-        self._seek_slider.setRange(0, 0)
-        self._seek_slider.sliderPressed.connect(self._on_seek_start)
-        self._seek_slider.sliderReleased.connect(self._on_seek_end)
-        self._seek_slider.sliderMoved.connect(self._on_seek_moved)
-        seek_row.addWidget(self._seek_slider)
-
-        self._time_total = QLabel('00:00')
-        self._time_total.setFixedWidth(50)
-        self._time_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        seek_row.addWidget(self._time_total)
-        main_layout.addLayout(seek_row)
-
-        # 按钮行
-        btn_row = QHBoxLayout()
-
-        fs_style = 'font-size: 16px; font-family: "Segoe UI Symbol", "Microsoft YaHei UI", sans-serif;'
-        
-        btn_prev = QPushButton('⏮')
-        btn_prev.setFixedSize(42, 32)
-        btn_prev.setStyleSheet(fs_style)
-        btn_prev.clicked.connect(self._player_tab._play_previous)
-        btn_row.addWidget(btn_prev)
-
-        btn_bw = QPushButton('⏪')
-        btn_bw.setFixedSize(42, 32)
-        btn_bw.setStyleSheet(fs_style)
-        btn_bw.clicked.connect(lambda: self._player_tab._skip(-10000))
-        btn_row.addWidget(btn_bw)
-
-        self._btn_play = QPushButton('▶')
-        self._btn_play.setFixedSize(48, 34)
-        self._btn_play.setStyleSheet(fs_style)
-        self._btn_play.clicked.connect(self._player_tab._toggle_play)
-        btn_row.addWidget(self._btn_play)
-
-        btn_fw = QPushButton('⏩')
-        btn_fw.setFixedSize(42, 32)
-        btn_fw.setStyleSheet(fs_style)
-        btn_fw.clicked.connect(lambda: self._player_tab._skip(10000))
-        btn_row.addWidget(btn_fw)
-
-        btn_next = QPushButton('⏭')
-        btn_next.setFixedSize(42, 32)
-        btn_next.setStyleSheet(fs_style)
-        btn_next.clicked.connect(self._player_tab._play_next)
-        btn_row.addWidget(btn_next)
-
-        btn_row.addSpacing(30)
-
-        vol_label = QLabel('音量')
-        btn_row.addWidget(vol_label)
-        self._volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._volume_slider.setRange(0, 100)
-        self._volume_slider.setFixedWidth(100)
-        self._volume_slider.valueChanged.connect(self._on_volume_changed)
-        btn_row.addWidget(self._volume_slider)
-
-        btn_row.addStretch()
-
-        btn_exit = QPushButton()
-        btn_exit.setFixedSize(36, 28)
-        btn_exit.setToolTip('退出全屏')
-        btn_exit.setIcon(PlayerTab._make_fullscreen_icon())
-        btn_exit.setIconSize(btn_exit.size() * 0.6)
-        btn_exit.clicked.connect(self._player_tab._exit_fullscreen)
-        btn_row.addWidget(btn_exit)
-
-        main_layout.addLayout(btn_row)
-
-    def attach(self, video_widget):
-        """绑定到全屏的视频控件并显示"""
-        self._attached = True
-        self._video_widget = video_widget
-        # 同步当前状态
-        pt = self._player_tab
-        self._seek_slider.setRange(0, pt.player.duration)
-        self._seek_slider.setValue(pt.player.position)
-        self._time_total.setText(format_time_ms(pt.player.duration))
-        self._time_current.setText(format_time_ms(pt.player.position))
-        self._volume_slider.setValue(pt.volume_slider.value())
-        self._btn_play.setText('⏸' if pt.player.is_playing else '▶')
-        self._update_position()
-        self.show()
-        self._track_timer.start()
-        self._sync_timer.start()
-
-    def detach(self):
-        """解除绑定并隐藏"""
-        self._attached = False
-        self._track_timer.stop()
-        self._sync_timer.stop()
-        self.hide()
-
-    def _update_position(self):
-        """定位到视频窗口底部"""
-        if not self._attached:
-            return
-        try:
-            vw = self._video_widget
-            global_pos = vw.mapToGlobal(vw.rect().topLeft())
-            vw_width = vw.width()
-            vw_height = vw.height()
-            self.setFixedWidth(vw_width)
-            self.move(global_pos.x(), global_pos.y() + vw_height - self.height())
-        except RuntimeError:
-            pass
-
-    def _sync_from_player(self):
-        """从播放器同步进度"""
-        if not self._attached or self._is_seeking:
-            return
-        pt = self._player_tab
-        self._seek_slider.setRange(0, pt.player.duration)
-        self._seek_slider.setValue(pt.player.position)
-        self._time_current.setText(format_time_ms(pt.player.position))
-        self._time_total.setText(format_time_ms(pt.player.duration))
-        self._btn_play.setText('⏸' if pt.player.is_playing else '▶')
-
-    def _on_seek_start(self):
-        self._is_seeking = True
-
-    def _on_seek_end(self):
-        self._is_seeking = False
-        self._player_tab.player.seek(self._seek_slider.value())
-
-    def _on_seek_moved(self, value):
-        self._time_current.setText(format_time_ms(value))
-
-    def _on_volume_changed(self, value):
-        self._player_tab.volume_slider.setValue(value)
-        self._player_tab.player.set_volume(value)
+    def cleanup(self):
+        self._save_playback_progress()
+        self._fs_sync.stop()
+        self.player.cleanup()
