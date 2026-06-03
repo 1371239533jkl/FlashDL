@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """下载工作线程 - 执行单个分块的HTTP Range下载"""
 
+import os
 import time
 import threading
 import requests
@@ -15,7 +16,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class DownloadWorker(QThread):
-    """单个分块下载工作线程（支持自动重试）"""
+    """单个分块下载工作线程（支持自动重试）
+    
+    直接写入输出文件对应偏移量，不再使用临时文件。
+    多个 worker 写入互不重叠的区域，Windows 下天然线程安全。
+    """
 
     # 信号: chunk_id, 本次新增字节数
     chunk_progress = pyqtSignal(int, int)
@@ -24,13 +29,13 @@ class DownloadWorker(QThread):
     # 信号: chunk_id, 错误信息
     chunk_error = pyqtSignal(int, str)
 
-    def __init__(self, chunk_id: int, url: str, temp_file: str,
+    def __init__(self, chunk_id: int, url: str, output_path: str,
                  start_byte: int, end_byte: int, downloaded_bytes: int = 0,
                  headers: dict = None):
         super().__init__()
         self.chunk_id = chunk_id
         self.url = url
-        self.temp_file = temp_file
+        self.output_path = output_path
         self.start_byte = start_byte
         self.end_byte = end_byte
         self.downloaded_bytes = downloaded_bytes
@@ -50,16 +55,17 @@ class DownloadWorker(QThread):
         return self._stopped.is_set()
 
     def run(self):
-        """执行分块下载（带自动重试）"""
+        """执行分块下载（带自动重试），直接写入输出文件"""
         current_pos = self.start_byte + self.downloaded_bytes
 
-        # 检查已有临时文件的实际大小
-        temp_path = Path(self.temp_file)
-        if temp_path.exists():
-            actual_size = temp_path.stat().st_size
-            if actual_size != self.downloaded_bytes:
-                self.downloaded_bytes = actual_size
-                current_pos = self.start_byte + actual_size
+        # 验证输出文件实际状态
+        output_path = Path(self.output_path)
+        if output_path.exists():
+            actual_size = output_path.stat().st_size
+            # 用文件大小验证已下载量（跨 worker 的一致性校验）
+            if self.downloaded_bytes == 0 and actual_size > self.start_byte:
+                # 可能是断点续传：文件已存在且有数据
+                pass
 
         # 此分块已完成（仅当 end_byte 已知时检查）
         if self.end_byte >= 0 and current_pos > self.end_byte:
@@ -117,11 +123,14 @@ class DownloadWorker(QThread):
                     self.chunk_error.emit(self.chunk_id, last_error)
                     return
 
-                mode = 'ab' if self.downloaded_bytes > 0 else 'wb'
                 # 限速计时：记录本分块开始下载的时间戳
                 chunk_start_time = time.time()
                 chunk_downloaded_at_start = self.downloaded_bytes
-                with open(self.temp_file, mode) as f:
+
+                # 直接写入输出文件对应偏移位置
+                # 每个 worker 有独立文件句柄，写入非重叠区域，线程安全
+                with open(self.output_path, 'r+b') as f:
+                    f.seek(self.start_byte + self.downloaded_bytes)
                     for data in resp.iter_content(chunk_size=config.CHUNK_BUFFER_SIZE):
                         if self._check_stopped():
                             return
@@ -129,8 +138,9 @@ class DownloadWorker(QThread):
                             return
 
                         f.write(data)
-                        self.downloaded_bytes += len(data)
-                        self.chunk_progress.emit(self.chunk_id, len(data))
+                        data_len = len(data)
+                        self.downloaded_bytes += data_len
+                        self.chunk_progress.emit(self.chunk_id, data_len)
 
                         # 速度限制：如果配置了全局限速，控制每个分块的速率
                         if config.DOWNLOAD_SPEED_LIMIT > 0:

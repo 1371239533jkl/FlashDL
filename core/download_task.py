@@ -18,7 +18,13 @@ from utils.format_utils import format_size, format_speed, format_time
 
 
 class DownloadTask(QObject):
-    """单个下载任务，协调多个DownloadWorker完成分块下载"""
+    """单个下载任务，协调多个DownloadWorker完成分块下载
+
+    架构：直接写入输出文件，跳过临时文件和合并阶段。
+    - prepare() 时预分配文件大小（truncate）
+    - 每个 worker 直接 seek+write 到最终文件的对应偏移
+    - 天然支持边下边播（下载期间文件即可被播放器打开）
+    """
 
     # 信号
     progress_updated = pyqtSignal(str, dict)    # (task_id, progress_info)
@@ -30,9 +36,12 @@ class DownloadTask(QObject):
     WAITING = 'waiting'
     DOWNLOADING = 'downloading'
     PAUSED = 'paused'
-    MERGING = 'merging'
+    MERGING = 'merging'       # 保留常量兼容旧代码，不再实际执行合并
     COMPLETED = 'completed'
     FAILED = 'failed'
+
+    # 边下边播最低进度阈值（百分制）
+    STREAM_PLAY_MIN_PROGRESS = 5
 
     def __init__(self, url: str, save_dir: str, file_name: str = '',
                  thread_count: int = config.DEFAULT_THREAD_COUNT,
@@ -51,7 +60,7 @@ class DownloadTask(QObject):
         self.error_message = ''
         self.created_time = time.strftime('%Y-%m-%d %H:%M:%S')
 
-        self.chunks = []           # 分块信息列表
+        self.chunks = []           # 分块信息列表（无 temp_file）
         self._workers = []         # 工作线程列表
         self._speed_samples = deque(maxlen=config.SPEED_WINDOW_SIZE)
         self._last_sample_size = 0
@@ -61,8 +70,8 @@ class DownloadTask(QObject):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_progress)
 
-        # 任务临时目录
-        self._temp_dir = ensure_long_path(os.path.join(config.TEMP_DIR, self.task_id))
+        # 状态持久化目录（仅存 task.json，不存临时文件）
+        self._state_dir = ensure_long_path(os.path.join(config.TEMP_DIR, self.task_id))
 
     @property
     def save_path(self) -> str:
@@ -73,6 +82,15 @@ class DownloadTask(QObject):
         if self.total_size <= 0:
             return 0.0
         return min(self.downloaded_size / self.total_size * 100, 100.0)
+
+    @property
+    def streamable(self) -> bool:
+        """是否可边下边播"""
+        return (self.status == self.DOWNLOADING
+                and self.total_size > 0
+                and self.supports_range
+                and self.progress >= self.STREAM_PLAY_MIN_PROGRESS
+                and os.path.exists(self.save_path))
 
     def get_info(self) -> dict:
         """获取任务当前完整信息"""
@@ -91,7 +109,7 @@ class DownloadTask(QObject):
 
     def prepare(self) -> bool:
         """
-        准备下载: 验证URL、获取文件信息、划分分块。
+        准备下载: 验证URL、获取文件信息、预创建输出文件、划分分块。
         返回是否成功。
         """
         info = validate_url(self.url, headers=self.headers)
@@ -109,8 +127,33 @@ class DownloadTask(QObject):
         if not self.supports_range or self.total_size <= 0:
             self.thread_count = 1
 
+        # 预创建输出文件（预分配空间）
+        save_path = self.save_path
+        os.makedirs(self.save_dir, exist_ok=True)
+
+        # 处理文件名冲突
+        if os.path.exists(save_path):
+            base, ext = os.path.splitext(self.file_name)
+            counter = 1
+            while os.path.exists(save_path):
+                self.file_name = f"{base}({counter}){ext}"
+                save_path = self.save_path
+                counter += 1
+
+        if self.total_size > 0:
+            # 预分配文件空间（稀疏文件，不占实际磁盘空间）
+            # 仅在新任务或文件不存在时执行
+            if not os.path.exists(save_path) or os.path.getsize(save_path) < self.total_size:
+                with open(save_path, 'wb') as f:
+                    f.seek(self.total_size - 1)
+                    f.write(b'\0')
+        else:
+            # 大小未知时创建空文件
+            if not os.path.exists(save_path):
+                open(save_path, 'wb').close()
+
         # 划分分块
-        os.makedirs(self._temp_dir, exist_ok=True)
+        os.makedirs(self._state_dir, exist_ok=True)
         self._create_chunks()
         self._save_state()
         return True
@@ -154,16 +197,17 @@ class DownloadTask(QObject):
         self._timer.start(config.UI_UPDATE_INTERVAL)
 
     def cancel(self):
-        """取消下载，清理临时文件"""
+        """取消下载，保留已下载的输出文件"""
         self._timer.stop()
         self._stop_workers()
-        self._cleanup_temp()
+        # 清理状态文件，但保留输出文件（用户可手动删除）
+        self._cleanup_state()
         self._set_status(self.FAILED)
 
     def retry(self) -> bool:
         """
         重试下载（断点续传）。
-        重置失败分块的状态为 pending，保留已完成分块的临时文件。
+        基于输出文件已有大小恢复已下载量。
         返回是否可重试。
         """
         if self.status != self.FAILED:
@@ -172,21 +216,21 @@ class DownloadTask(QObject):
         self._timer.stop()
         self._stop_workers()
 
+        # 基于输出文件验证已下载的字节
+        save_path = self.save_path
+        if os.path.exists(save_path) and self.total_size > 0:
+            actual_size = os.path.getsize(save_path)
+            # 重新计算各分块的 downloaded_bytes
+            for chunk in self.chunks:
+                expected_end = min(chunk['end_byte'] + 1, actual_size) if chunk['end_byte'] >= 0 else actual_size
+                already = max(0, expected_end - chunk['start_byte'])
+                chunk['downloaded_bytes'] = already
+            self.downloaded_size = actual_size
+
         # 重置失败分块，保留已完成分块
         for chunk in self.chunks:
             if chunk['status'] != 'completed':
                 chunk['status'] = 'pending'
-                # 验证临时文件的实际大小
-                temp_file = chunk['temp_file']
-                if os.path.exists(temp_file):
-                    actual = os.path.getsize(temp_file)
-                    chunk['downloaded_bytes'] = actual
-                else:
-                    chunk['downloaded_bytes'] = 0
-
-        # 重新计算已下载总量
-        self.downloaded_size = sum(c['downloaded_bytes'] for c in self.chunks
-                                   if c['status'] == 'completed' or os.path.exists(c['temp_file']))
 
         self.error_message = ''
         self._speed_samples.clear()
@@ -197,17 +241,16 @@ class DownloadTask(QObject):
         return True
 
     def _create_chunks(self):
-        """根据线程数划分下载分块"""
+        """根据线程数划分下载分块（不再使用临时文件）"""
         self.chunks = []
         if self.total_size <= 0:
-            # 文件大小未知，单块下载
+            # 文件大小未知，单块顺序下载
             self.chunks.append({
                 'chunk_id': 0,
                 'start_byte': 0,
-                'end_byte': -1,  # 未知终止位置
+                'end_byte': -1,
                 'downloaded_bytes': 0,
                 'status': 'pending',
-                'temp_file': os.path.join(self._temp_dir, 'chunk_0.tmp')
             })
             return
 
@@ -221,7 +264,6 @@ class DownloadTask(QObject):
                 'end_byte': end,
                 'downloaded_bytes': 0,
                 'status': 'pending',
-                'temp_file': os.path.join(self._temp_dir, f'chunk_{i}.tmp')
             })
 
     def _start_workers(self):
@@ -235,7 +277,7 @@ class DownloadTask(QObject):
             worker = DownloadWorker(
                 chunk_id=chunk['chunk_id'],
                 url=self.url,
-                temp_file=chunk['temp_file'],
+                output_path=self.save_path,
                 start_byte=chunk['start_byte'],
                 end_byte=chunk['end_byte'],
                 downloaded_bytes=chunk['downloaded_bytes'],
@@ -268,8 +310,11 @@ class DownloadTask(QObject):
         # 检查是否所有分块都已完成
         if all(c['status'] == 'completed' for c in self.chunks):
             self._timer.stop()
-            self._set_status(self.MERGING)
-            self._merge_chunks()
+            self._stop_workers()
+            # 直接标记完成（无需合并）
+            self._cleanup_state()
+            self._set_status(self.COMPLETED)
+            self.completed.emit(self.task_id, self.save_path)
 
     def _on_chunk_error(self, chunk_id: int, error: str):
         """分块下载出错回调（不停止其他下载中的分块）"""
@@ -285,55 +330,6 @@ class DownloadTask(QObject):
             self._save_state()
             self._set_status(self.FAILED)
             self.failed.emit(self.task_id, error)
-
-    def _merge_chunks(self):
-        """合并所有分块为最终文件"""
-        try:
-            os.makedirs(self.save_dir, exist_ok=True)
-            save_path = self.save_path
-
-            # 处理文件名冲突
-            if os.path.exists(save_path):
-                base, ext = os.path.splitext(self.file_name)
-                counter = 1
-                while os.path.exists(save_path):
-                    self.file_name = f"{base}({counter}){ext}"
-                    save_path = self.save_path
-                    counter += 1
-
-            # 验证分块完整性：检查所有 completed chunk 的临时文件是否存在
-            missing_chunks = [c for c in self.chunks
-                              if c['status'] == 'completed' and not os.path.exists(c['temp_file'])]
-            if missing_chunks:
-                ids = ', '.join(str(c['chunk_id']) for c in missing_chunks)
-                raise IOError(f'分块文件丢失: [{ids}]')
-
-            with open(save_path, 'wb') as out_file:
-                for chunk in sorted(self.chunks, key=lambda c: c['chunk_id']):
-                    chunk_path = chunk['temp_file']
-                    if os.path.exists(chunk_path):
-                        with open(chunk_path, 'rb') as chunk_file:
-                            while True:
-                                buf = chunk_file.read(config.CHUNK_BUFFER_SIZE * 128)
-                                if not buf:
-                                    break
-                                out_file.write(buf)
-
-            # 验证合并后文件大小（仅当 total_size 已知时）
-            if self.total_size > 0:
-                actual_size = os.path.getsize(save_path)
-                if actual_size != self.total_size:
-                    print(f'[警告] 文件大小不匹配: 预期 {self.total_size}, 实际 {actual_size}',
-                          file=sys.stderr)
-
-            self._cleanup_temp()
-            self._set_status(self.COMPLETED)
-            self.completed.emit(self.task_id, save_path)
-
-        except Exception as e:
-            self.error_message = f'文件合并失败: {e}'
-            self._set_status(self.FAILED)
-            self.failed.emit(self.task_id, self.error_message)
 
     def _update_progress(self):
         """定时更新进度信息并发送信号"""
@@ -384,9 +380,9 @@ class DownloadTask(QObject):
             'created_time': self.created_time,
             'chunks': self.chunks,
         }
-        os.makedirs(self._temp_dir, exist_ok=True)
-        tmp_path = os.path.join(self._temp_dir, 'task.json.tmp')
-        final_path = os.path.join(self._temp_dir, 'task.json')
+        os.makedirs(self._state_dir, exist_ok=True)
+        tmp_path = os.path.join(self._state_dir, 'task.json.tmp')
+        final_path = os.path.join(self._state_dir, 'task.json')
         try:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
@@ -424,25 +420,25 @@ class DownloadTask(QObject):
         task.chunks = state.get('chunks', [])
         task.status = task.PAUSED  # 恢复时始终为暂停状态
 
-        # 验证临时文件完整性
-        for chunk in task.chunks:
-            if chunk['status'] != 'completed':
-                temp_file = chunk['temp_file']
-                if os.path.exists(temp_file):
-                    actual_size = os.path.getsize(temp_file)
-                    chunk['downloaded_bytes'] = actual_size
-                else:
-                    chunk['downloaded_bytes'] = 0
+        # 验证输出文件完整性（替代旧的 temp_file 检测）
+        save_path = task.save_path
+        if os.path.exists(save_path) and task.total_size > 0:
+            actual_size = os.path.getsize(save_path)
+            # 重新校准分块的 downloaded_bytes
+            for chunk in task.chunks:
+                expected_end = min(chunk['end_byte'] + 1, actual_size) if chunk['end_byte'] >= 0 else actual_size
+                already = max(0, expected_end - chunk['start_byte'])
+                chunk['downloaded_bytes'] = already
 
         # 重新计算已下载总量
         task.downloaded_size = sum(c['downloaded_bytes'] for c in task.chunks)
         return task
 
-    def _cleanup_temp(self):
-        """清理临时文件"""
+    def _cleanup_state(self):
+        """清理状态文件目录"""
         import shutil
         try:
-            if os.path.exists(self._temp_dir):
-                shutil.rmtree(self._temp_dir)
+            if os.path.exists(self._state_dir):
+                shutil.rmtree(self._state_dir)
         except Exception:
             pass

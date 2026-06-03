@@ -105,6 +105,14 @@ class TaskCard(QFrame):
         self.btn_play.hide()
         row4.addWidget(self.btn_play)
 
+        self.btn_stream_play = QPushButton('🎬 边下边播')
+        self.btn_stream_play.setFixedWidth(90)
+        self.btn_stream_play.setObjectName('PrimaryBtn')
+        self.btn_stream_play.setToolTip('边下载边播放（需下载进度 > 5%）')
+        self.btn_stream_play.clicked.connect(self._stream_play)
+        self.btn_stream_play.hide()
+        row4.addWidget(self.btn_stream_play)
+
         self.btn_retry = QPushButton('重试')
         self.btn_retry.setFixedWidth(60)
         self.btn_retry.clicked.connect(self._retry)
@@ -114,7 +122,10 @@ class TaskCard(QFrame):
         layout.addLayout(row4)
 
         self._file_path = ''
-        self._is_video = False
+        # 提前从文件名判断是否是视频（用于边下边播按钮显示）
+        file_name = info.get('file_name', '')
+        ext = os.path.splitext(file_name)[1].lower()
+        self._is_video = ext in config.VIDEO_EXTENSIONS
         self._status = info.get('status', DownloadTask.WAITING)
         self._update_button_states()
         # 拖拽起始位置
@@ -153,6 +164,8 @@ class TaskCard(QFrame):
         pct = progress_info.get('progress', 0)
         self.progress_label.setText(f'{downloaded} / {total}  ({pct:.1f}%)')
         self.time_label.setText(f"剩余 {progress_info.get('remaining_time', '--:--')}")
+        # 进度更新时刷新按钮状态（边下边播按钮可能在跨过5%阈值后出现）
+        self._update_button_states()
 
     def update_status(self, status: str):
         """更新任务状态"""
@@ -197,6 +210,12 @@ class TaskCard(QFrame):
         self.btn_play.setVisible(is_done and self._is_video)
         self.btn_retry.setVisible(is_failed)
 
+        # 边下边播按钮：下载中、进度>=5%、文件存在
+        task = self.download_manager.tasks.get(self.task_id)
+        can_stream = (task and task.streamable and self._is_video and
+                      task.supports_range and task.total_size > 0)
+        self.btn_stream_play.setVisible(can_stream)
+
         if self._status == DownloadTask.PAUSED:
             self.btn_pause.setText('继续')
         else:
@@ -235,6 +254,16 @@ class TaskCard(QFrame):
     def _play_video(self):
         if self._file_path and os.path.exists(self._file_path):
             signal_bus.play_video.emit(self._file_path)
+
+    def _stream_play(self):
+        """边下边播：打开正在下载的文件进行播放"""
+        task = self.download_manager.tasks.get(self.task_id)
+        if not task:
+            return
+        save_path = task.save_path
+        if not save_path or not os.path.exists(save_path):
+            return
+        signal_bus.play_video.emit(save_path)
 
 
 class _ReorderWidget(QWidget):
