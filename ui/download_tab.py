@@ -39,7 +39,8 @@ class TaskCard(QFrame):
         # 第一行: 文件名 + 文件大小
         row1 = QHBoxLayout()
         self.name_label = QLabel(info.get('file_name', '准备中...'))
-        self.name_label.setStyleSheet('font-weight: bold; font-size: 14px; color: #FFFFFF;')
+        name_color = '#FFFFFF' if get_setting('theme', 'dark') == 'dark' else '#1A1A1A'
+        self.name_label.setStyleSheet(f'font-weight: bold; font-size: 14px; color: {name_color};')
         row1.addWidget(self.name_label)
         row1.addStretch()
         total = info.get('total_size', -1)
@@ -87,13 +88,13 @@ class TaskCard(QFrame):
         row4.addWidget(self.btn_cancel)
 
         self.btn_open_file = QPushButton('打开文件')
-        self.btn_open_file.setFixedWidth(80)
+        self.btn_open_file.setFixedWidth(85)
         self.btn_open_file.clicked.connect(self._open_file)
         self.btn_open_file.hide()
         row4.addWidget(self.btn_open_file)
 
-        self.btn_open_folder = QPushButton('打开文件夹')
-        self.btn_open_folder.setFixedWidth(90)
+        self.btn_open_folder = QPushButton('文件夹')
+        self.btn_open_folder.setFixedWidth(70)
         self.btn_open_folder.clicked.connect(self._open_folder)
         self.btn_open_folder.hide()
         row4.addWidget(self.btn_open_folder)
@@ -106,7 +107,7 @@ class TaskCard(QFrame):
         row4.addWidget(self.btn_play)
 
         self.btn_stream_play = QPushButton('🎬 边下边播')
-        self.btn_stream_play.setFixedWidth(90)
+        self.btn_stream_play.setFixedWidth(105)
         self.btn_stream_play.setObjectName('PrimaryBtn')
         self.btn_stream_play.setToolTip('边下载边播放（需下载进度 > 5%）')
         self.btn_stream_play.clicked.connect(self._stream_play)
