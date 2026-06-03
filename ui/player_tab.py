@@ -8,14 +8,9 @@ from PyQt6.QtWidgets import (
     QSlider, QComboBox, QFileDialog, QListWidget, QListWidgetItem,
     QSplitter, QFrame, QMenu
 )
-from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtMultimediaWidgets import QVideoWidget
-
 import config
-from player.video_player import VideoPlayer
+from player.mpv_player import MpvPlayer
 from player.playlist_manager import PlaylistManager
-from player.subtitle_manager import SubtitleManager
-from player.subtitle_widget import SubtitleWidget
 from utils.format_utils import format_time_ms
 from utils.settings import get as get_setting, set_value as set_setting
 
@@ -37,7 +32,6 @@ class PlayerTab(QWidget):
         self._click_timer.timeout.connect(self._toggle_play)
         self.playlist = PlaylistManager()
         self.playlist.load()
-        self.subtitle_manager = SubtitleManager()
         self._setup_ui()
         self._connect_signals()
         # 恢复播放列表后在 UI 中显示
@@ -59,7 +53,7 @@ class PlayerTab(QWidget):
         left_layout.setSpacing(0)
 
         # 视频显示区域
-        self.video_widget = QVideoWidget()
+        self.video_widget = QWidget()
         self.video_widget.setMinimumHeight(300)
         self.video_widget.setStyleSheet('background-color: #000000;')
         self.video_widget.setMouseTracking(True)
@@ -68,11 +62,8 @@ class PlayerTab(QWidget):
         # 全屏覆盖控制条（独立透明窗口）
         self.fullscreen_controls = _FullscreenControlsOverlay(self)
 
-        # 字幕覆盖窗口（独立透明窗口，跟踪视频区域位置）
-        self.subtitle_widget = SubtitleWidget(self.video_widget)
-
         # 播放器实例
-        self.player = VideoPlayer(self.video_widget)
+        self.player = MpvPlayer(self.video_widget)
 
         # 控制条
         controls = self._create_controls()
@@ -258,10 +249,10 @@ class PlayerTab(QWidget):
         return panel
 
     def _connect_signals(self):
-        self.player.player.positionChanged.connect(self._on_position_changed)
-        self.player.player.durationChanged.connect(self._on_duration_changed)
-        self.player.player.playbackStateChanged.connect(self._on_state_changed)
-        self.player.player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self.player.position_changed.connect(self._on_position_changed)
+        self.player.duration_changed.connect(self._on_duration_changed)
+        self.player.playback_state_changed.connect(self._on_state_changed)
+        self.player.media_status_changed.connect(self._on_media_status_changed)
 
     # === 播放控制 ===
     def play_file(self, file_path: str):
@@ -452,16 +443,15 @@ class PlayerTab(QWidget):
         if not self._is_seeking:
             self.seek_slider.setValue(position)
             self.time_current.setText(format_time_ms(position))
-            self._update_subtitle(position)
 
     def _on_duration_changed(self, duration):
         self.seek_slider.setRange(0, duration)
         self.time_total.setText(format_time_ms(duration))
 
     def _on_state_changed(self, state):
-        if state == QMediaPlayer.PlaybackState.PlayingState:
+        if state == MpvPlayer.PLAYING:
             self.btn_play.setText('⏸')
-        elif state == QMediaPlayer.PlaybackState.PausedState:
+        elif state == MpvPlayer.PAUSED:
             self.btn_play.setText('▶')
             # 暂停时保存进度
             self._save_playback_progress()
@@ -469,11 +459,11 @@ class PlayerTab(QWidget):
             self.btn_play.setText('▶')
 
     def _on_media_status_changed(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+        if status == MpvPlayer.END_OF_MEDIA:
             # 自动播放下一个
             if self.playlist.has_next():
                 self._play_next()
-        elif status == QMediaPlayer.MediaStatus.LoadedMedia:
+        elif status == MpvPlayer.LOADED:
             # 视频加载完毕，延迟100ms后恢复播放进度（给Qt时间处理完内部状态）
             path = self.player.current_file
             if path:
@@ -581,8 +571,6 @@ class PlayerTab(QWidget):
 
     def cleanup(self):
         self._save_playback_progress()
-        self.subtitle_manager.clear()
-        self.subtitle_widget.cleanup()
         self.fullscreen_controls.detach()
         self.player.cleanup()
 
@@ -612,42 +600,34 @@ class PlayerTab(QWidget):
         if saved_pos > 0:
             self.player.seek(saved_pos)
 
-    # === 字幕 ===
+    # === 字幕（mpv 原生 libass 渲染）===
+
     def _on_subtitle_menu(self):
         """字幕按钮点击：弹出菜单（添加字幕 + 延迟调节）"""
         menu = QMenu(self)
         menu.setStyleSheet('font-size: 12px; padding: 4px;')
-        
-        # 当前状态
-        if self.subtitle_manager.is_loaded:
-            offset = self.subtitle_manager.offset
-            if offset != 0:
-                off_text = f'当前偏移: {offset/1000:+.1f}s'
-            else:
-                off_text = '已同步'
-            menu.addAction(off_text).setEnabled(False)
+
+        delay_ms = self.player.get_subtitle_delay()
+        if delay_ms != 0:
+            off_text = f'当前偏移: {delay_ms/1000:+.1f}s'
         else:
-            menu.addAction('未加载字幕').setEnabled(False)
-        
+            off_text = '已同步'
+        menu.addAction(off_text).setEnabled(False)
+
         menu.addSeparator()
-        
-        # 添加字幕文件
         menu.addAction('[添加字幕文件]', self._open_subtitle_dialog)
         menu.addSeparator()
-        
-        # 延迟调节
+
         menu.addAction('[提前 0.5s]', lambda: self._adjust_subtitle_offset(-500))
         menu.addAction('[延后 0.5s]', lambda: self._adjust_subtitle_offset(500))
-        
-        # 重置
-        if self.subtitle_manager.offset != 0:
+
+        if delay_ms != 0:
             menu.addSeparator()
-            menu.addAction('[重置同步]', lambda: self._adjust_subtitle_offset(-self.subtitle_manager.offset))
-        
-        # 在按钮上方弹出
+            menu.addAction('[重置同步]', lambda: self._adjust_subtitle_offset(-delay_ms))
+
         btn_pos = self.btn_subtitle.mapToGlobal(self.btn_subtitle.rect().bottomLeft())
         menu.exec(btn_pos - QPoint(0, menu.sizeHint().height() + self.btn_subtitle.height()))
-    
+
     def _open_subtitle_dialog(self):
         """手动选择字幕文件"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -659,58 +639,57 @@ class PlayerTab(QWidget):
 
     def _load_subtitle(self, subtitle_path: str):
         """加载字幕文件"""
-        success = self.subtitle_manager.load_subtitle(subtitle_path)
-        if success:
-            self.btn_subtitle.setText('字幕')
-            self.btn_subtitle.setToolTip(f'已加载: {os.path.basename(subtitle_path)}')
-            self._update_subtitle(self.player.position)
+        self.player.add_subtitle(subtitle_path)
+        self.btn_subtitle.setText('字幕')
+        self.btn_subtitle.setToolTip(f'已加载: {os.path.basename(subtitle_path)}')
+
+    def _auto_detect_subtitle(self, video_path: str) -> str | None:
+        """自动检测同目录下的同名字幕文件"""
+        if not video_path:
+            return None
+        base = os.path.splitext(video_path)[0]
+        suffixes = ['', '.zh', '.chs', '.chi', '.cn', '.sc']
+        for suffix in suffixes:
+            for ext in config.SUBTITLE_EXTENSIONS:
+                candidate = f'{base}{suffix}{ext}'
+                if os.path.isfile(candidate):
+                    return candidate
+        return None
 
     def _auto_load_subtitle(self, video_path: str):
         """自动检测并加载同名字幕"""
-        self.subtitle_manager.clear()
-        self.subtitle_widget.clear()
         self.btn_subtitle.setText('字幕')
         self.btn_subtitle.setToolTip('加载字幕文件')
-        # 恢复该视频的字幕偏移量
         self._restore_subtitle_offset(video_path)
 
         if not config.SUBTITLE_AUTO_LOAD:
             return
-        subtitle_path = self.subtitle_manager.auto_detect_subtitle(video_path)
+        subtitle_path = self._auto_detect_subtitle(video_path)
         if subtitle_path:
             self._load_subtitle(subtitle_path)
 
     def _update_subtitle(self, position_ms: int):
-        """根据播放位置更新字幕显示"""
-        if not self.subtitle_manager.is_loaded or not self.subtitle_manager.enabled:
-            return
-        subtitle = self.subtitle_manager.get_subtitle_at(position_ms)
-        if subtitle:
-            self.subtitle_widget.set_text(subtitle.text)
-        else:
-            self.subtitle_widget.clear()
+        """字幕由 mpv 原生 libass 渲染，无需手动更新"""
+        pass
 
     # === 字幕延迟调节 ===
 
     def _adjust_subtitle_offset(self, delta_ms: int):
         """调整字幕时间偏移量"""
-        new_offset = self.subtitle_manager.offset + delta_ms
-        self.subtitle_manager.offset = new_offset
+        new_delay = self.player.get_subtitle_delay() + delta_ms
+        self.player.set_subtitle_delay(new_delay)
         self._update_subtitle_delay_label()
-        # 立即刷新字幕
-        self._update_subtitle(self.player.position)
-        # 保存此视频的偏移量
         self._save_subtitle_offset()
 
     def _update_subtitle_delay_label(self):
         """更新字幕延迟标签显示"""
-        offset = self.subtitle_manager.offset
-        if offset == 0:
+        delay_ms = self.player.get_subtitle_delay()
+        if delay_ms == 0:
             self.sub_delay_label.setText('同步')
-        elif offset > 0:
-            self.sub_delay_label.setText(f'+{offset/1000:.1f}s')
+        elif delay_ms > 0:
+            self.sub_delay_label.setText(f'+{delay_ms/1000:.1f}s')
         else:
-            self.sub_delay_label.setText(f'{offset/1000:.1f}s')
+            self.sub_delay_label.setText(f'{delay_ms/1000:.1f}s')
 
     def _save_subtitle_offset(self):
         """保存当前视频的字幕偏移量"""
@@ -719,18 +698,18 @@ class PlayerTab(QWidget):
             return
         path = os.path.normpath(path)
         offset_data = get_setting('subtitle_offsets', {})
-        offset = self.subtitle_manager.offset
-        if offset == 0:
+        delay_ms = self.player.get_subtitle_delay()
+        if delay_ms == 0:
             offset_data.pop(path, None)
         else:
-            offset_data[path] = offset
+            offset_data[path] = delay_ms
         set_setting('subtitle_offsets', offset_data)
 
     def _restore_subtitle_offset(self, file_path: str):
         """恢复视频的字幕偏移量"""
         offset_data = get_setting('subtitle_offsets', {})
-        saved_offset = offset_data.get(os.path.normpath(file_path), 0)
-        self.subtitle_manager.offset = saved_offset
+        saved_delay = offset_data.get(os.path.normpath(file_path), 0)
+        self.player.set_subtitle_delay(saved_delay)
         self._update_subtitle_delay_label()
 
 

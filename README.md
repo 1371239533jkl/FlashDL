@@ -143,9 +143,8 @@ FlashDL/
 │   └── video_fetcher.py     #   网页视频嗅探（预留）
 │
 ├── player/                  # 播放器模块
-│   ├── video_player.py      #   视频播放封装
-│   ├── subtitle_manager.py  #   字幕管理
-│   ├── subtitle_widget.py   #   字幕覆盖窗口
+│   ├── mpv_player.py        #   mpv 播放封装（python-mpv C API）
+│   ├── video_player.py      #   视频播放封装（QMediaPlayer，回退）
 │   └── playlist_manager.py  #   播放列表管理
 │
 ├── ui/                      # 界面层
@@ -173,9 +172,9 @@ FlashDL/
 | GUI 框架 | PyQt6 (Qt 6.6+) |
 | HTTP 下载 | requests + 多线程分片 |
 | BT/磁力 | libtorrent (2.0+) |
-| 字幕解析 | pysubs2 |
+| 字幕解析 | pysubs2 / mpv libass |
 | 数据持久化 | SQLite (sqlite3) + JSON |
-| 视频播放 | QMediaPlayer (PyQt6) |
+| 视频播放 | mpv (python-mpv C API) |
 | 打包 | PyInstaller |
 
 ---
@@ -190,7 +189,7 @@ FlashDL/
 - [x] 下载队列管理
 - [x] 播放列表持久化
 - [x] 边下边播（HTTP 下载）
-- [ ] mpv 引擎替换（替代 QMediaPlayer）
+- [x] mpv 引擎替换（替代 QMediaPlayer）
 - [ ] 批量任务操作（多选/全选）
 - [ ] 百度网盘资源下载
 
