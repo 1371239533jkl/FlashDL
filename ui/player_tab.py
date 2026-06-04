@@ -351,8 +351,9 @@ class PlayerTab(QWidget):
             main_win._title_bar.hide()
         if hasattr(main_win, 'tab_widget'):
             main_win.tab_widget.tabBar().hide()
+        main_win.installEventFilter(self)
         main_win.showFullScreen()
-        # 裁剪视频铺满全屏（保持比例，不拉伸变形）
+        self.video_widget.setFocus()
         self.player.set_fill_screen(True)
         self.fullscreen_controls.attach(self.video_widget)
         # 控制条初始隐藏，鼠标移动时 _show_fullscreen_controls 才显示
@@ -363,7 +364,9 @@ class PlayerTab(QWidget):
         self._mouse_hide_timer.stop()
         self.fullscreen_controls.detach()
         self.video_widget.window().showNormal()
+        # 移除事件过滤器
         main_win = self.video_widget.window()
+        main_win.removeEventFilter(self)
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.show()
         if hasattr(main_win, 'tab_widget'):
