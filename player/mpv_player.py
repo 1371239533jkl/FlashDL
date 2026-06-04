@@ -1,86 +1,33 @@
 # -*- coding: utf-8 -*-
-"""MpvPlayer — 基于 mpv 子进程 + Named Pipe JSON IPC 的播放器封装层
+"""MpvPlayer — 基于 python-mpv C API 的播放器封装层
 
-通过 QProcess 启动 mpv.exe，使用 --wid 嵌入 PyQt6 QWidget 渲染。
-采用 Windows Named Pipe 进行 JSON IPC 通信，50ms 轮询同步状态。
-不需要 libmpv.dll，只需要系统已安装 mpv（通过 winget 等）。
+使用 python-mpv 库直接调用 libmpv，通过 wid 嵌入 PyQt6 窗口渲染。
+采用观察者模式（QTimer 50ms 轮询）同步播放状态并发射信号。
 
-初始化完全异步：使用工作线程连接 named pipe，不阻塞 Qt 主线程。
+接口与 VideoPlayer 完全兼容，可直接替换 import。
+已废弃旧的 mpv_bridge.lua QProcess 方案。
 """
 
-import json
-import os
-import random
-import string
-import threading
-import time
-
-import win32file
-import win32pipe
-import pywintypes
-
-from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal, QThread
-
-
-class _PipeConnector(QThread):
-    """后台线程：连接 mpv named pipe"""
-
-    connected = pyqtSignal()  # 连接成功信号
-    failed = pyqtSignal(str)  # 连接失败信号
-
-    def __init__(self, pipe_path, parent=None):
-        super().__init__(parent)
-        self._pipe_path = pipe_path
-        self._handle = None
-        self._stop_event = threading.Event()
-
-    def run(self):
-        """在后台线程中尝试连接 pipe"""
-        for _ in range(100):  # 最多重试 10 秒 (100 * 100ms)
-            if self._stop_event.is_set():
-                return
-            try:
-                handle = win32file.CreateFile(
-                    self._pipe_path,
-                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                    0, None,
-                    win32file.OPEN_EXISTING,
-                    0, None,
-                )
-                self._handle = handle
-                self.connected.emit()
-                return
-            except pywintypes.error as e:
-                if e.winerror == 2:  # ERROR_FILE_NOT_FOUND - pipe 还没创建
-                    time.sleep(0.1)
-                    continue
-                else:
-                    self.failed.emit(str(e))
-                    return
-        self.failed.emit("Timeout waiting for mpv pipe")
-
-    def stop(self):
-        self._stop_event.set()
-        self.wait(100)
-
-    def get_handle(self):
-        return self._handle
+import mpv
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 
 class MpvPlayer(QObject):
-    """基于 mpv 子进程 + Named Pipe IPC 的播放器封装
+    """基于 python-mpv 的播放器封装
 
     Args:
-        container: QWidget，mpv 通过 --wid 嵌入渲染
+        container: QWidget，mpv 通过 wid 嵌入渲染
         parent: 父 QObject
     """
 
+    # 状态常量（与 QMediaPlayer 一致）
     STOPPED = 0
     PLAYING = 1
     PAUSED = 2
     LOADED = 3
     END_OF_MEDIA = 4
 
+    # 信号
     position_changed = pyqtSignal(int)
     duration_changed = pyqtSignal(int)
     playback_state_changed = pyqtSignal(int)
@@ -89,9 +36,7 @@ class MpvPlayer(QObject):
     def __init__(self, container, parent=None):
         super().__init__(parent)
         self._container = container
-        self._current_file = ""
-        self._pipe_handle = None
-        self._connected = False
+        self._current_file = ''
 
         # 缓存状态
         self._position = 0
@@ -104,236 +49,130 @@ class MpvPlayer(QObject):
         self._sub_delay = 0.0
         self._loaded = False
 
-        # 唯一的 pipe 名
-        pipe_name = f"mpv-{os.getpid()}-{_random_suffix()}"
-        self._pipe_path = rf"\\.\pipe\{pipe_name}"
-
-        # 启动 mpv 子进程
+        # 创建 mpv 实例，嵌入到 container
         wid = int(container.winId())
-        self._process = QProcess(self)
-        self._process.setProgram("mpv")
-        self._process.setArguments([
-            f"--wid={wid}",
-            f"--input-ipc-server={self._pipe_path}",
-            "--keep-open=yes",
-            "--osc=no",
-            "--input-default-bindings",
-            "--input-vo-keyboard=yes",
-            "--ytdl=no",
-            "--sub-auto=no",
-            "--idle=yes",
-        ])
-        self._process.start()
+        self._mpv = mpv.MPV(
+            wid=str(wid),
+            keep_open='yes',
+            osc='no',
+            input_default_bindings=True,
+            input_vo_keyboard=True,
+            ytdl=False,
+            sub_auto=False,
+        )
 
-        # 使用工作线程异步连接 pipe
-        self._connector = _PipeConnector(self._pipe_path, self)
-        self._connector.connected.connect(self._on_pipe_connected)
-        self._connector.failed.connect(self._on_pipe_failed)
-        self._connector.start()
+        # 初始化音量
+        self._mpv.volume = 70
 
-        # 轮询定时器（pipe 连接成功后才 start）
+        # 观察者模式：50ms 定时轮询
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(50)
         self._poll_timer.timeout.connect(self._poll_state)
-
-    def _on_pipe_connected(self):
-        """Pipe 连接成功回调"""
-        self._pipe_handle = self._connector.get_handle()
-        self._connected = True
-        # 初始音量
-        self._send_raw(["set_property", "volume", 70])
-        # 启动轮询
         self._poll_timer.start()
-
-    def _on_pipe_failed(self, error_msg):
-        """Pipe 连接失败回调"""
-        print(f"[MpvPlayer] Pipe 连接失败: {error_msg}")
-
-    # ── IPC 底层 ──────────────────────────────────────────────
-
-    def _send_raw(self, command: list):
-        """发送 JSON IPC 命令（仅写入，不读响应）"""
-        if not self._connected or self._pipe_handle is None:
-            return
-        try:
-            msg = json.dumps({"command": command}) + "\n"
-            win32file.WriteFile(self._pipe_handle, msg.encode())
-        except Exception:
-            pass
-
-    def _read_line(self) -> str | None:
-        """从 pipe 读取一行 JSON 响应（非阻塞）"""
-        if not self._connected:
-            return None
-        try:
-            hr, peek_data, _, _ = win32pipe.PeekNamedPipe(self._pipe_handle, 0)
-            if peek_data and len(peek_data) > 0:
-                hr, raw = win32file.ReadFile(self._pipe_handle, 4096)
-                if raw:
-                    return raw.decode().strip()
-        except Exception:
-            pass
-        return None
 
     # ── 状态轮询 ──────────────────────────────────────────────
 
     def _poll_state(self):
         """轮询 mpv 属性，检测变化时发射信号"""
-        if not self._connected:
-            return
-
-        # 批量发送 7 个 get_property 请求
-        props = [
-            "time-pos", "duration", "pause", "eof-reached",
-            "volume", "speed", "sub-delay",
-        ]
         try:
-            for name in props:
-                msg = json.dumps({"command": ["get_property", name]}) + "\n"
-                win32file.WriteFile(self._pipe_handle, msg.encode())
-        except Exception:
-            return
-
-        # 批量读取 7 个响应
-        responses = []
-        for _ in range(len(props)):
-            resp = None
-            for __ in range(20):
-                line = self._read_line()
-                if line:
-                    try:
-                        resp = json.loads(line)
-                    except json.JSONDecodeError:
-                        pass
-                    break
-            responses.append(resp)
-
-        # 解析
-        pos = self._get_data(responses, 0)
-        dur = self._get_data(responses, 1)
-        paused = self._get_data(responses, 2)
-        eof = self._get_data(responses, 3)
-        vol_val = self._get_data(responses, 4)
-        spd_val = self._get_data(responses, 5)
-        sub_val = self._get_data(responses, 6)
-
-        self._handle_pos(pos)
-        self._handle_dur(dur)
-        self._handle_pause(paused, eof)
-        self._handle_vol(vol_val)
-        self._handle_speed(spd_val)
-        self._handle_sub(sub_val)
-
-    def _get_data(self, responses, idx):
-        if idx < len(responses) and responses[idx]:
-            return responses[idx].get("data")
-        return None
-
-    def _handle_pos(self, pos):
-        if pos is not None:
-            try:
-                pos_ms = int(float(pos) * 1000)
+            # ── 位置 ──
+            pos = self._mpv.time_pos
+            if pos is not None:
+                pos_ms = int(pos * 1000)
                 if abs(pos_ms - self._position) > 80:
                     self._position = pos_ms
                     self.position_changed.emit(pos_ms)
-            except (ValueError, TypeError):
-                pass
 
-    def _handle_dur(self, dur):
-        if dur is not None:
-            try:
-                dur_ms = int(float(dur) * 1000)
+            # ── 时长 ──
+            dur = self._mpv.duration
+            if dur is not None:
+                dur_ms = int(dur * 1000)
                 if dur_ms != self._duration:
                     self._duration = dur_ms
                     self.duration_changed.emit(dur_ms)
+                # 检测媒体加载完毕（duration 从无到有）
                 if dur_ms > 0 and not self._loaded:
                     self._loaded = True
                     self.media_status_changed.emit(self.LOADED)
-            except (ValueError, TypeError):
-                pass
 
-    def _handle_pause(self, paused, eof):
-        if paused is not None:
-            pb = bool(paused)
-            if pb != self._paused:
-                self._paused = pb
-                if not pb and self._eof:
+            # ── 暂停 / 播放状态 ──
+            paused = self._mpv.pause
+            if paused != self._paused:
+                self._paused = paused
+                if not paused and self._eof:
                     self._eof = False
-                new_state = self.PAUSED if pb else self.PLAYING
+                new_state = self.PAUSED if paused else self.PLAYING
                 if new_state != self._playback_state:
                     self._playback_state = new_state
                     self.playback_state_changed.emit(new_state)
-        if self._loaded and eof is not None and bool(eof) and not self._eof:
-            self._eof = True
-            self.media_status_changed.emit(self.END_OF_MEDIA)
 
-    def _handle_vol(self, val):
-        if val is not None:
-            try:
-                v = int(val)
-                if v != self._volume:
-                    self._volume = v
-            except (ValueError, TypeError):
-                pass
+            # ── EOF ──
+            if self._loaded:
+                eof = self._mpv.eof_reached
+                if eof and not self._eof:
+                    self._eof = True
+                    self.media_status_changed.emit(self.END_OF_MEDIA)
 
-    def _handle_speed(self, val):
-        if val is not None:
-            try:
-                sp = float(val)
-                if sp != self._speed:
-                    self._speed = sp
-            except (ValueError, TypeError):
-                pass
+            # ── 音量 ──
+            vol = self._mpv.volume
+            if vol != self._volume:
+                self._volume = vol
 
-    def _handle_sub(self, val):
-        if val is not None:
-            try:
-                sd = float(val)
-                if sd != self._sub_delay:
-                    self._sub_delay = sd
-            except (ValueError, TypeError):
-                pass
+            # ── 倍速 ──
+            speed = self._mpv.speed
+            if speed != self._speed:
+                self._speed = speed
+
+            # ── 字幕延迟 ──
+            sub_delay = self._mpv.sub_delay
+            if sub_delay != self._sub_delay:
+                self._sub_delay = sub_delay
+        except Exception:
+            pass  # mpv 属性读取偶发失败，不阻塞轮询
 
     # ── 播放控制 ──────────────────────────────────────────────
 
     def load(self, file_path: str):
-        if not file_path:
-            return
+        """加载视频文件并自动开始播放"""
         self._current_file = file_path
         self._loaded = False
         self._eof = False
         self._position = 0
         self._duration = 0
-        normalized = file_path.replace("\\", "/")
-        self._send_raw(["loadfile", normalized])
-        self._send_raw(["set_property", "pause", False])
+        normalized = file_path.replace('\\', '/')
+        self._mpv.play(normalized)
+        self._mpv.pause = False
         self._paused = False
         self._playback_state = self.PLAYING
         self.playback_state_changed.emit(self.PLAYING)
 
     def play(self):
+        """播放"""
         if self._current_file:
-            self._send_raw(["set_property", "pause", False])
+            self._mpv.pause = False
             self._paused = False
             if self._playback_state != self.PLAYING:
                 self._playback_state = self.PLAYING
                 self.playback_state_changed.emit(self.PLAYING)
 
     def pause(self):
-        self._send_raw(["set_property", "pause", True])
+        """暂停"""
+        self._mpv.pause = True
         self._paused = True
         if self._playback_state != self.PAUSED:
             self._playback_state = self.PAUSED
             self.playback_state_changed.emit(self.PAUSED)
 
     def toggle_play(self):
+        """切换播放/暂停"""
         if self._paused or self._eof:
             self.play()
         else:
             self.pause()
 
     def stop(self):
-        self._send_raw(["stop"])
+        """停止播放"""
+        self._mpv.command('stop')
         self._paused = True
         self._eof = False
         self._loaded = False
@@ -342,84 +181,91 @@ class MpvPlayer(QObject):
             self.playback_state_changed.emit(self.STOPPED)
 
     def seek(self, position_ms: int):
+        """跳转到指定位置(毫秒)"""
         sec = max(0.0, position_ms / 1000.0)
-        self._send_raw(["seek", sec, "absolute"])
+        self._mpv.time_pos = sec
 
     # ── 属性 ──────────────────────────────────────────────────
 
     @property
     def is_playing(self) -> bool:
-        return not self._paused and not self._eof and self._current_file != ""
+        """是否正在播放"""
+        return not self._paused and not self._eof and self._current_file != ''
 
     @property
     def duration(self) -> int:
+        """视频总时长(毫秒)"""
         return self._duration
 
     @property
     def position(self) -> int:
+        """当前播放位置(毫秒)"""
         return self._position
 
     @property
     def current_file(self) -> str:
+        """当前播放文件路径"""
         return self._current_file
 
     # ── 音量 ──────────────────────────────────────────────────
 
     def set_volume(self, volume: int):
+        """设置音量 0-100"""
         v = max(0, min(100, volume))
-        self._send_raw(["set_property", "volume", v])
+        self._mpv.volume = v
         self._volume = v
 
     def get_volume(self) -> int:
+        """获取当前音量(0-100)"""
         return self._volume
 
     def volume(self) -> int:
+        """获取当前音量(0-100) — 别名"""
         return self._volume
 
     # ── 倍速 ──────────────────────────────────────────────────
 
     def set_rate(self, rate: float):
-        self._send_raw(["set_property", "speed", rate])
+        """设置播放倍速"""
+        self._mpv.speed = rate
         self._speed = rate
 
     @property
     def playback_rate(self) -> float:
+        """当前播放倍速"""
         return self._speed
 
+    # 别名（兼容 player_tab.py 中的旧方法名）
     def set_playback_rate(self, rate: float):
+        """设置播放倍速 — 别名"""
         self.set_rate(rate)
 
     def get_playback_rate(self) -> float:
+        """获取当前播放倍速 — 别名"""
         return self._speed
 
     # ── 字幕（mpv 原生 libass 渲染）───────────────────────────
 
     def add_subtitle(self, file_path: str):
-        self._send_raw(["sub-add", file_path.replace("\\", "/")])
+        """添加字幕文件（mpv libass 原生渲染）"""
+        normalized = file_path.replace('\\', '/')
+        self._mpv.sub_add(normalized)
 
     def set_subtitle_delay(self, ms: int):
-        self._send_raw(["set_property", "sub-delay", ms / 1000.0])
+        """设置字幕延迟(毫秒)，正数=字幕延后显示"""
+        self._mpv.sub_delay = ms / 1000.0
 
     def get_subtitle_delay(self) -> int:
+        """获取当前字幕延迟(毫秒)"""
         return int(self._sub_delay * 1000)
 
     # ── 清理 ──────────────────────────────────────────────────
 
     def cleanup(self):
+        """释放 mpv 资源"""
         self._poll_timer.stop()
-        self._connector.stop()
         try:
-            if self._pipe_handle is not None:
-                win32file.CloseHandle(self._pipe_handle)
+            self._mpv.terminate()
         except Exception:
-            pass
-        if self._process.state() != QProcess.ProcessState.NotRunning:
-            self._process.terminate()
-            self._process.waitForFinished(3000)
-            if self._process.state() != QProcess.ProcessState.NotRunning:
-                self._process.kill()
+            pass  # mpv 已退出时 terminate 可能抛异常
         self._playback_state = self.STOPPED
-
-
-def _random_suffix(length=8):
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
