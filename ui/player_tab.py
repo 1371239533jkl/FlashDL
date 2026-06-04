@@ -345,10 +345,14 @@ class PlayerTab(QWidget):
         self._is_fullscreen = True
         self._controls_frame.hide()
         self._playlist_panel.hide()
-        # 隐藏主窗口自定义标题栏
+        # 隐藏主窗口的标题栏和标签栏
         main_win = self.video_widget.window()
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.hide()
+        if hasattr(main_win, 'tab_widget'):
+            main_win.tab_widget.tabBar().hide()
+        # 拦截主窗口键盘事件（防止 Tab 切换等全局快捷键）
+        main_win.installEventFilter(self)
         main_win.showFullScreen()
         # 裁剪视频铺满全屏（保持比例，不拉伸变形）
         self.player.set_fill_screen(True)
@@ -361,10 +365,14 @@ class PlayerTab(QWidget):
         self._mouse_hide_timer.stop()
         self.fullscreen_controls.detach()
         self.video_widget.window().showNormal()
-        # 恢复主窗口自定义标题栏
+        # 移除主窗口事件过滤器
         main_win = self.video_widget.window()
+        main_win.removeEventFilter(self)
+        # 恢复主窗口自定义标题栏和标签栏
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.show()
+        if hasattr(main_win, 'tab_widget'):
+            main_win.tab_widget.tabBar().show()
         self._controls_frame.show()
         self._playlist_panel.show()
         # 恢复正常画面比例
@@ -388,6 +396,39 @@ class PlayerTab(QWidget):
 
     def eventFilter(self, obj, event):
         """拦截全屏状态下的键盘和鼠标事件"""
+        main_win = self.video_widget.window()
+
+        # 主窗口事件（全屏时拦截）
+        if obj is main_win and self._is_fullscreen:
+            if event.type() == QEvent.Type.KeyPress:
+                key = event.key()
+                if key == Qt.Key.Key_Escape:
+                    self._exit_fullscreen()
+                    return True
+                if key == Qt.Key.Key_Space:
+                    self._toggle_play()
+                    return True
+                if key == Qt.Key.Key_Left:
+                    self._skip(-10000)
+                    self._show_fullscreen_controls()
+                    return True
+                if key == Qt.Key.Key_Right:
+                    self._skip(10000)
+                    self._show_fullscreen_controls()
+                    return True
+                if key == Qt.Key.Key_Up:
+                    vol = min(100, self.volume_slider.value() + 5)
+                    self.volume_slider.setValue(vol)
+                    self._show_fullscreen_controls()
+                    return True
+                if key == Qt.Key.Key_Down:
+                    vol = max(0, self.volume_slider.value() - 5)
+                    self.volume_slider.setValue(vol)
+                    self._show_fullscreen_controls()
+                    return True
+            return super().eventFilter(obj, event)
+
+        # video_widget 事件
         if obj is not self.video_widget:
             return super().eventFilter(obj, event)
 
