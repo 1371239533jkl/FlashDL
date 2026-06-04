@@ -1,7 +1,8 @@
 # FlashDL - 视频下载 & 播放工具
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)](https://pypi.org/project/PyQt6/)
+[![mpv](https://img.shields.io/badge/Player-mpv-blueviolet)](https://mpv.io/)
 [![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
 
 **FlashDL** 是一款开源的桌面视频下载与播放工具，支持 HTTP/HTTPS 多线程高速下载、磁力链接/BT 下载、本地视频播放，以及简洁的 PotPlayer 风格界面。
@@ -35,10 +36,12 @@
 - **下载队列** — 并发数量限制（默认 3），支持拖拽排序
 
 ### 🎬 播放
-- 支持常见视频格式（MP4、MKV、AVI、MOV、FLV、WebM 等）
+- mpv 引擎驱动，支持常见视频格式（MP4、MKV、AVI、MOV、FLV、WebM 等）
+- 全屏播放（双击画面），自动隐藏控制条，鼠标移动恢复
+- 键盘快捷键：Space 暂停 · ←→ 快进快退 · ↑↓ 音量 · ESC 退出全屏
 - 倍速播放（0.5x - 2.0x）
-- 外挂字幕加载（SRT/ASS/SSA/VTT）、同步偏移调节
-- 播放进度自动保存
+- 外挂字幕加载（SRT/ASS/SSA/VTT），mpv libass 原生渲染
+- 字幕同步偏移调节、播放进度自动保存
 - 播放列表持久化（退出后自动恢复）
 
 ### 🎨 界面
@@ -52,8 +55,10 @@
 
 ### 环境要求
 
-- Python 3.8+
-- Windows 10/11（优先支持），macOS / Linux 亦可运行（字幕窗口功能受限）
+- Python 3.10+
+- Windows 10/11
+- [mpv 播放器](https://mpv.io/installation/)（推荐通过 winget 安装：`winget install mpv`）
+- libmpv-2.dll（从 mpv-dev 包解压放入 mpv 安装目录，参见 [mpv 配置](#mpv-配置)）
 
 ### 安装
 
@@ -62,12 +67,20 @@
 git clone https://github.com/1371239533jkl/FlashDL.git
 cd FlashDL
 
-# 安装依赖
+# 安装 Python 依赖
 pip install -r requirements.txt
 
 # 启动
 python main.py
 ```
+
+### mpv 配置
+
+项目使用 **python-mpv C API** 作为播放引擎，需要 `libmpv-2.dll`：
+
+1. 安装 mpv：`winget install mpv`
+2. 下载 [mpv-dev 包](https://github.com/shinchiro/mpv-winbuild-cmake/releases)（含 `libmpv-2.dll`）
+3. 解压后把 `libmpv-2.dll` 复制到 mpv 安装目录（`C:\Program Files\MPV Player\` 或 PATH 中的目录即可）
 
 > ⚠️ **libtorrent** 编译安装较复杂，如遇安装失败，可先移除 libtorrent 相关行再安装：
 > ```bash
@@ -232,9 +245,9 @@ pyinstaller video_downloader.spec
 ```
 
 ### 程序闪退/无响应
+- 确保 `libmpv-2.dll` 已正确放入 mpv 安装目录或 PATH 中
 - 查看 `temp/` 目录下的日志文件
 - 磁力下载时 BT 端口（默认 6881）可能被防火墙拦截
-- 视频文件编码不兼容时，可尝试装 `K-Lite Codec Pack`
 
 ### GitHub 推送失败
 ```
