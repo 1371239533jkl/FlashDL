@@ -75,6 +75,14 @@ class MagnetDownloadTask(QObject):
             return 0.0
         return min(self.downloaded_size / self.total_size * 100, 100.0)
 
+    @property
+    def streamable(self) -> bool:
+        """是否可边下边播（下载中或暂停均可）"""
+        return (self.status in (self.DOWNLOADING, self.PAUSED)
+                and self.total_size > 0
+                and self.progress >= 5     # 最低 5%
+                and os.path.exists(self.save_path))
+
     def get_info(self) -> dict:
         """获取任务当前完整信息(与 DownloadTask.get_info 格式一致)"""
         return {
