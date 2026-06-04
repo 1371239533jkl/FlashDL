@@ -72,6 +72,13 @@ class MainWindow(QMainWindow):
         # 标签页
         self.tab_widget = QTabWidget()
         self.tab_widget.setDocumentMode(True)
+        # 禁用键盘方向键切换标签页（会与全屏播放快捷键冲突）
+        _tab_cls = type(self.tab_widget)
+        self.tab_widget.keyPressEvent = lambda e: (
+            _tab_cls.keyPressEvent(self.tab_widget, e)
+            if e.key() not in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+            else None
+        )
         main_layout.addWidget(self.tab_widget)
 
         # 延迟导入标签页(避免循环导入)

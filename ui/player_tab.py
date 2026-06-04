@@ -351,8 +351,6 @@ class PlayerTab(QWidget):
             main_win._title_bar.hide()
         if hasattr(main_win, 'tab_widget'):
             main_win.tab_widget.tabBar().hide()
-        # 拦截主窗口键盘事件（防止 Tab 切换等全局快捷键）
-        main_win.installEventFilter(self)
         main_win.showFullScreen()
         # 裁剪视频铺满全屏（保持比例，不拉伸变形）
         self.player.set_fill_screen(True)
@@ -365,17 +363,13 @@ class PlayerTab(QWidget):
         self._mouse_hide_timer.stop()
         self.fullscreen_controls.detach()
         self.video_widget.window().showNormal()
-        # 移除主窗口事件过滤器
         main_win = self.video_widget.window()
-        main_win.removeEventFilter(self)
-        # 恢复主窗口自定义标题栏和标签栏
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.show()
         if hasattr(main_win, 'tab_widget'):
             main_win.tab_widget.tabBar().show()
         self._controls_frame.show()
         self._playlist_panel.show()
-        # 恢复正常画面比例
         self.player.set_fill_screen(False)
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
 
