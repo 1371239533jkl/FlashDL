@@ -354,7 +354,6 @@ class PlayerTab(QWidget):
         main_win.installEventFilter(self)
         main_win.showFullScreen()
         self.video_widget.setFocus()
-        self.player.set_fill_screen(True)
         self.fullscreen_controls.attach(self.video_widget)
         # 控制条初始隐藏，鼠标移动时 _show_fullscreen_controls 才显示
 
@@ -373,7 +372,6 @@ class PlayerTab(QWidget):
             main_win.tab_widget.tabBar().show()
         self._controls_frame.show()
         self._playlist_panel.show()
-        self.player.set_fill_screen(False)
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _auto_hide_controls(self):
