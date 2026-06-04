@@ -244,14 +244,11 @@ class MpvPlayer(QObject):
         """获取当前播放倍速 — 别名"""
         return self._speed
 
-    # ── 全屏视频拉伸 ──────────────────────────────────────────
+    # ── 全屏视频裁剪 ──────────────────────────────────────────
 
     def set_fill_screen(self, enabled: bool):
-        """全屏时拉伸视频铺满画面
-        
-        关闭 keepaspect，mpv 将拉伸视频填满整个渲染区域。
-        """
-        self._mpv.keepaspect = not enabled
+        """全屏时裁剪视频铺满画面（保持比例，裁剪溢出）"""
+        self._mpv.panscan = 1.0 if enabled else 0.0
 
     # ── 字幕（mpv 原生 libass 渲染）───────────────────────────
 

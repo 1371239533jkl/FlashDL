@@ -350,13 +350,16 @@ class PlayerTab(QWidget):
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.hide()
         main_win.showFullScreen()
-        # 拉伸视频铺满全屏
+        # 裁剪视频铺满全屏（保持比例，不拉伸变形）
         self.player.set_fill_screen(True)
         self.fullscreen_controls.attach(self.video_widget)
-        self._mouse_hide_timer.start(3000)
+        # 控制条初始隐藏，鼠标移动时 _show_fullscreen_controls 才显示
 
     def _exit_fullscreen(self):
         self._is_fullscreen = False
+        # 先隐藏全屏控制条和鼠标定时器（必须在 showNormal 之前）
+        self._mouse_hide_timer.stop()
+        self.fullscreen_controls.detach()
         self.video_widget.window().showNormal()
         # 恢复主窗口自定义标题栏
         main_win = self.video_widget.window()
@@ -366,8 +369,6 @@ class PlayerTab(QWidget):
         self._playlist_panel.show()
         # 恢复正常画面比例
         self.player.set_fill_screen(False)
-        self.fullscreen_controls.detach()
-        self._mouse_hide_timer.stop()
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _auto_hide_controls(self):
@@ -895,7 +896,7 @@ class _FullscreenControlsOverlay(QWidget):
         main_layout.addLayout(btn_row)
 
     def attach(self, video_widget):
-        """绑定到全屏的视频控件并显示"""
+        """绑定到全屏的视频控件（初始隐藏，鼠标移动时显示）"""
         self._attached = True
         # 同步当前状态
         pt = self._player_tab
@@ -912,8 +913,7 @@ class _FullscreenControlsOverlay(QWidget):
             geom = screen.geometry()
             self.setFixedWidth(geom.width())
             self.move(0, geom.height() - self.height())
-        self.show()
-        self.raise_()
+        # 初始隐藏，鼠标移动时 _show_fullscreen_controls 会显示
         self._sync_timer.start()
 
     def detach(self):

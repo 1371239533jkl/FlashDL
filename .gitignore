@@ -35,3 +35,4 @@ player/bin/
 # 系统
 Thumbs.db
 .DS_Store
+.codegraph/
