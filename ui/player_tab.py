@@ -345,15 +345,27 @@ class PlayerTab(QWidget):
         self._is_fullscreen = True
         self._controls_frame.hide()
         self._playlist_panel.hide()
-        self.video_widget.window().showFullScreen()
+        # 隐藏主窗口自定义标题栏
+        main_win = self.video_widget.window()
+        if hasattr(main_win, '_title_bar'):
+            main_win._title_bar.hide()
+        main_win.showFullScreen()
+        # 拉伸视频铺满全屏
+        self.player.set_fill_screen(True)
         self.fullscreen_controls.attach(self.video_widget)
         self._mouse_hide_timer.start(3000)
 
     def _exit_fullscreen(self):
         self._is_fullscreen = False
         self.video_widget.window().showNormal()
+        # 恢复主窗口自定义标题栏
+        main_win = self.video_widget.window()
+        if hasattr(main_win, '_title_bar'):
+            main_win._title_bar.show()
         self._controls_frame.show()
         self._playlist_panel.show()
+        # 恢复正常画面比例
+        self.player.set_fill_screen(False)
         self.fullscreen_controls.detach()
         self._mouse_hide_timer.stop()
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)

@@ -244,6 +244,15 @@ class MpvPlayer(QObject):
         """获取当前播放倍速 — 别名"""
         return self._speed
 
+    # ── 全屏视频拉伸 ──────────────────────────────────────────
+
+    def set_fill_screen(self, enabled: bool):
+        """全屏时拉伸视频铺满画面
+        
+        关闭 keepaspect，mpv 将拉伸视频填满整个渲染区域。
+        """
+        self._mpv.keepaspect = not enabled
+
     # ── 字幕（mpv 原生 libass 渲染）───────────────────────────
 
     def add_subtitle(self, file_path: str):
