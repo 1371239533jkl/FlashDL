@@ -5,34 +5,70 @@
 采用 Windows Named Pipe 进行 JSON IPC 通信，50ms 轮询同步状态。
 不需要 libmpv.dll，只需要系统已安装 mpv（通过 winget 等）。
 
-初始化是异步的：__init__ 立即返回，pipe 连接通过 QTimer 重试，
-连接成功后自动开始轮询。在连接成功前的命令会被静默丢弃。
+初始化完全异步：使用工作线程连接 named pipe，不阻塞 Qt 主线程。
 """
 
 import json
 import os
 import random
 import string
+import threading
+import time
 
 import win32file
 import win32pipe
 import pywintypes
 
-from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal, QThread
 
 
-_RETRY_INTERVAL = 50       # ms —— pipe 连接重试间隔
-_RETRY_MAX = 60            # 最多重试 ~3 秒
+class _PipeConnector(QThread):
+    """后台线程：连接 mpv named pipe"""
 
+    connected = pyqtSignal()  # 连接成功信号
+    failed = pyqtSignal(str)  # 连接失败信号
 
-def _random_suffix(length=8):
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+    def __init__(self, pipe_path, parent=None):
+        super().__init__(parent)
+        self._pipe_path = pipe_path
+        self._handle = None
+        self._stop_event = threading.Event()
+
+    def run(self):
+        """在后台线程中尝试连接 pipe"""
+        for _ in range(100):  # 最多重试 10 秒 (100 * 100ms)
+            if self._stop_event.is_set():
+                return
+            try:
+                handle = win32file.CreateFile(
+                    self._pipe_path,
+                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                    0, None,
+                    win32file.OPEN_EXISTING,
+                    0, None,
+                )
+                self._handle = handle
+                self.connected.emit()
+                return
+            except pywintypes.error as e:
+                if e.winerror == 2:  # ERROR_FILE_NOT_FOUND - pipe 还没创建
+                    time.sleep(0.1)
+                    continue
+                else:
+                    self.failed.emit(str(e))
+                    return
+        self.failed.emit("Timeout waiting for mpv pipe")
+
+    def stop(self):
+        self._stop_event.set()
+        self.wait(100)
+
+    def get_handle(self):
+        return self._handle
 
 
 class MpvPlayer(QObject):
     """基于 mpv 子进程 + Named Pipe IPC 的播放器封装
-
-    初始化是异步的，Pipe 连接成功后自动启动轮询。
 
     Args:
         container: QWidget，mpv 通过 --wid 嵌入渲染
@@ -56,7 +92,6 @@ class MpvPlayer(QObject):
         self._current_file = ""
         self._pipe_handle = None
         self._connected = False
-        self._retry_count = 0
 
         # 缓存状态
         self._position = 0
@@ -90,42 +125,29 @@ class MpvPlayer(QObject):
         ])
         self._process.start()
 
+        # 使用工作线程异步连接 pipe
+        self._connector = _PipeConnector(self._pipe_path, self)
+        self._connector.connected.connect(self._on_pipe_connected)
+        self._connector.failed.connect(self._on_pipe_failed)
+        self._connector.start()
+
         # 轮询定时器（pipe 连接成功后才 start）
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(50)
         self._poll_timer.timeout.connect(self._poll_state)
 
-        # 异步连接重试定时器
-        self._connect_timer = QTimer(self)
-        self._connect_timer.setInterval(_RETRY_INTERVAL)
-        self._connect_timer.timeout.connect(self._try_connect)
-        self._connect_timer.start()
+    def _on_pipe_connected(self):
+        """Pipe 连接成功回调"""
+        self._pipe_handle = self._connector.get_handle()
+        self._connected = True
+        # 初始音量
+        self._send_raw(["set_property", "volume", 70])
+        # 启动轮询
+        self._poll_timer.start()
 
-    def _try_connect(self):
-        """定时尝试连接 named pipe（非阻塞）"""
-        if self._connected:
-            self._connect_timer.stop()
-            return
-
-        self._retry_count += 1
-        try:
-            self._pipe_handle = win32file.CreateFile(
-                self._pipe_path,
-                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                0, None,
-                win32file.OPEN_EXISTING,
-                0, None,
-            )
-            self._connected = True
-            self._connect_timer.stop()
-            # 初始音量
-            self._send_raw(["set_property", "volume", 70])
-            # 启动轮询
-            self._poll_timer.start()
-        except pywintypes.error as e:
-            if self._retry_count >= _RETRY_MAX:
-                self._connect_timer.stop()
-                print(f"[MpvPlayer] 无法连接 mpv pipe（已重试 {self._retry_count} 次）: {e}")
+    def _on_pipe_failed(self, error_msg):
+        """Pipe 连接失败回调"""
+        print(f"[MpvPlayer] Pipe 连接失败: {error_msg}")
 
     # ── IPC 底层 ──────────────────────────────────────────────
 
@@ -144,8 +166,8 @@ class MpvPlayer(QObject):
         if not self._connected:
             return None
         try:
-            hr, data, _, _ = win32pipe.PeekNamedPipe(self._pipe_handle, 0)
-            if data and len(data) > 0:
+            hr, peek_data, _, _ = win32pipe.PeekNamedPipe(self._pipe_handle, 0)
+            if peek_data and len(peek_data) > 0:
                 hr, raw = win32file.ReadFile(self._pipe_handle, 4096)
                 if raw:
                     return raw.decode().strip()
@@ -174,10 +196,9 @@ class MpvPlayer(QObject):
 
         # 批量读取 7 个响应
         responses = []
-        deadline = QTimer.singleShot  # just a marker, we use a different approach
         for _ in range(len(props)):
             resp = None
-            for __ in range(20):  # 最多等 20ms
+            for __ in range(20):
                 line = self._read_line()
                 if line:
                     try:
@@ -188,13 +209,13 @@ class MpvPlayer(QObject):
             responses.append(resp)
 
         # 解析
-        pos       = self._get_data(responses, 0)
-        dur       = self._get_data(responses, 1)
-        paused    = self._get_data(responses, 2)
-        eof       = self._get_data(responses, 3)
-        vol_val   = self._get_data(responses, 4)
-        spd_val   = self._get_data(responses, 5)
-        sub_val   = self._get_data(responses, 6)
+        pos = self._get_data(responses, 0)
+        dur = self._get_data(responses, 1)
+        paused = self._get_data(responses, 2)
+        eof = self._get_data(responses, 3)
+        vol_val = self._get_data(responses, 4)
+        spd_val = self._get_data(responses, 5)
+        sub_val = self._get_data(responses, 6)
 
         self._handle_pos(pos)
         self._handle_dur(dur)
@@ -385,8 +406,8 @@ class MpvPlayer(QObject):
     # ── 清理 ──────────────────────────────────────────────────
 
     def cleanup(self):
-        self._connect_timer.stop()
         self._poll_timer.stop()
+        self._connector.stop()
         try:
             if self._pipe_handle is not None:
                 win32file.CloseHandle(self._pipe_handle)
@@ -398,3 +419,7 @@ class MpvPlayer(QObject):
             if self._process.state() != QProcess.ProcessState.NotRunning:
                 self._process.kill()
         self._playback_state = self.STOPPED
+
+
+def _random_suffix(length=8):
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
