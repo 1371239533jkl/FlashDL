@@ -340,13 +340,13 @@ class PlayerTab(QWidget):
 
     def _enter_fullscreen(self):
         self._is_fullscreen = True
-        self.video_widget.setFullScreen(True)
+        self.video_widget.window().showFullScreen()
         self.fullscreen_controls.attach(self.video_widget)
         self._mouse_hide_timer.start(3000)
 
     def _exit_fullscreen(self):
         self._is_fullscreen = False
-        self.video_widget.setFullScreen(False)
+        self.video_widget.window().showNormal()
         self.fullscreen_controls.detach()
         self._mouse_hide_timer.stop()
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
