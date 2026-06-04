@@ -67,6 +67,7 @@ class PlayerTab(QWidget):
 
         # 控制条
         controls = self._create_controls()
+        self._controls_frame = controls
         left_layout.addWidget(controls)
 
         splitter.addWidget(left_panel)
@@ -340,6 +341,7 @@ class PlayerTab(QWidget):
 
     def _enter_fullscreen(self):
         self._is_fullscreen = True
+        self._controls_frame.hide()
         self.video_widget.window().showFullScreen()
         self.fullscreen_controls.attach(self.video_widget)
         self._mouse_hide_timer.start(3000)
@@ -347,6 +349,7 @@ class PlayerTab(QWidget):
     def _exit_fullscreen(self):
         self._is_fullscreen = False
         self.video_widget.window().showNormal()
+        self._controls_frame.show()
         self.fullscreen_controls.detach()
         self._mouse_hide_timer.stop()
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
@@ -715,31 +718,19 @@ class PlayerTab(QWidget):
 
 class _FullscreenControlsOverlay(QWidget):
     """
-    全屏时的控制条覆盖窗口。
-    独立的无边框半透明窗口，悬浮在全屏视频底部，
-    包含进度条、播放按钮、时间和音量控制。
+    全屏时的控制条覆盖层。
+    作为 video_widget 的子控件置于底部，
+    包含进度条、播放按钮、时间、音量、倍速和字幕控制。
     """
 
     def __init__(self, player_tab: 'PlayerTab'):
-        super().__init__(None)
+        super().__init__(None)  # 初始无 parent，attach 时设置
         self._player_tab = player_tab
         self._attached = False
         self._is_seeking = False
 
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-
         self._build_ui()
-
-        # 跟踪定时器
-        self._track_timer = QTimer(self)
-        self._track_timer.setInterval(50)
-        self._track_timer.timeout.connect(self._update_position)
+        self.hide()
 
         # 同步播放器进度
         self._sync_timer = QTimer(self)
@@ -848,6 +839,24 @@ class _FullscreenControlsOverlay(QWidget):
         self._volume_slider.valueChanged.connect(self._on_volume_changed)
         btn_row.addWidget(self._volume_slider)
 
+        btn_row.addSpacing(8)
+
+        speed_label = QLabel('倍速')
+        btn_row.addWidget(speed_label)
+        self._speed_combo = QComboBox()
+        self._speed_combo.addItems([f'{r}x' for r in config.PLAYBACK_RATES])
+        self._speed_combo.setCurrentText('1.0x')
+        self._speed_combo.setFixedWidth(60)
+        self._speed_combo.currentIndexChanged.connect(self._on_speed_changed)
+        btn_row.addWidget(self._speed_combo)
+
+        btn_row.addSpacing(8)
+
+        self._btn_sub = QPushButton('字幕')
+        self._btn_sub.setFixedWidth(50)
+        self._btn_sub.clicked.connect(self._player_tab._on_subtitle_menu)
+        btn_row.addWidget(self._btn_sub)
+
         btn_row.addStretch()
 
         btn_exit = QPushButton()
@@ -864,6 +873,11 @@ class _FullscreenControlsOverlay(QWidget):
         """绑定到全屏的视频控件并显示"""
         self._attached = True
         self._video_widget = video_widget
+        # 作为 video_widget 的子控件，置于底部
+        self.setParent(video_widget)
+        self.setFixedWidth(video_widget.width())
+        self.move(0, video_widget.height() - self.height())
+        video_widget.installEventFilter(self)
         # 同步当前状态
         pt = self._player_tab
         self._seek_slider.setRange(0, pt.player.duration)
@@ -871,32 +885,28 @@ class _FullscreenControlsOverlay(QWidget):
         self._time_total.setText(format_time_ms(pt.player.duration))
         self._time_current.setText(format_time_ms(pt.player.position))
         self._volume_slider.setValue(pt.volume_slider.value())
+        self._speed_combo.setCurrentIndex(pt.speed_combo.currentIndex())
         self._btn_play.setText('⏸' if pt.player.is_playing else '▶')
-        self._update_position()
         self.show()
-        self._track_timer.start()
+        self.raise_()
         self._sync_timer.start()
 
     def detach(self):
         """解除绑定并隐藏"""
         self._attached = False
-        self._track_timer.stop()
         self._sync_timer.stop()
+        if self._video_widget is not None:
+            self._video_widget.removeEventFilter(self)
+            self._video_widget = None
+        self.setParent(None)
         self.hide()
 
-    def _update_position(self):
-        """定位到视频窗口底部"""
-        if not self._attached:
-            return
-        try:
-            vw = self._video_widget
-            global_pos = vw.mapToGlobal(vw.rect().topLeft())
-            vw_width = vw.width()
-            vw_height = vw.height()
-            self.setFixedWidth(vw_width)
-            self.move(global_pos.x(), global_pos.y() + vw_height - self.height())
-        except RuntimeError:
-            pass
+    def eventFilter(self, obj, event):
+        """拦截 resize 事件，更新控制条位置"""
+        if obj is self._video_widget and event.type() == QEvent.Type.Resize:
+            self.setFixedWidth(obj.width())
+            self.move(0, obj.height() - self.height())
+        return super().eventFilter(obj, event)
 
     def _sync_from_player(self):
         """从播放器同步进度"""
@@ -922,3 +932,13 @@ class _FullscreenControlsOverlay(QWidget):
     def _on_volume_changed(self, value):
         self._player_tab.volume_slider.setValue(value)
         self._player_tab.player.set_volume(value)
+
+    def _on_speed_changed(self, index):
+        text = self._speed_combo.itemText(index)
+        if text:
+            try:
+                rate = float(text.replace('x', ''))
+                self._player_tab.player.set_playback_rate(rate)
+                self._player_tab.speed_combo.setCurrentIndex(index)
+            except ValueError:
+                pass
