@@ -13,6 +13,7 @@ from player.mpv_player import MpvPlayer
 from player.playlist_manager import PlaylistManager
 from utils.format_utils import format_time_ms
 from utils.settings import get as get_setting, set_value as set_setting
+from ui.styles import get_tokens
 
 
 class PlayerTab(QWidget):
@@ -118,39 +119,37 @@ class PlayerTab(QWidget):
         btn_row.setSpacing(4)
 
         # 播放控制按钮（居中靠左）
-        ctrl_style = 'font-size: 16px; padding: 2px;'
-
         self.btn_prev = QPushButton('⏮')
         self.btn_prev.setFixedSize(38, 34)
-        self.btn_prev.setStyleSheet(ctrl_style)
+        self.btn_prev.setObjectName('PlayerCtrlBtn')
         self.btn_prev.setToolTip('上一个')
         self.btn_prev.clicked.connect(self._play_previous)
         btn_row.addWidget(self.btn_prev)
 
         btn_backward = QPushButton('⏪')
         btn_backward.setFixedSize(38, 34)
-        btn_backward.setStyleSheet(ctrl_style)
+        btn_backward.setObjectName('PlayerCtrlBtn')
         btn_backward.setToolTip('快退 10 秒')
         btn_backward.clicked.connect(lambda: self._skip(-10000))
         btn_row.addWidget(btn_backward)
 
         self.btn_play = QPushButton('▶')
         self.btn_play.setFixedSize(46, 38)
-        self.btn_play.setStyleSheet(ctrl_style)
         self.btn_play.setObjectName('PrimaryBtn')
+        self.btn_play.setStyleSheet('font-size: 16px; padding: 2px;')
         self.btn_play.clicked.connect(self._toggle_play)
         btn_row.addWidget(self.btn_play)
 
         btn_forward = QPushButton('⏩')
         btn_forward.setFixedSize(38, 34)
-        btn_forward.setStyleSheet(ctrl_style)
+        btn_forward.setObjectName('PlayerCtrlBtn')
         btn_forward.setToolTip('快进 10 秒')
         btn_forward.clicked.connect(lambda: self._skip(10000))
         btn_row.addWidget(btn_forward)
 
         self.btn_next = QPushButton('⏭')
         self.btn_next.setFixedSize(38, 34)
-        self.btn_next.setStyleSheet(ctrl_style)
+        self.btn_next.setObjectName('PlayerCtrlBtn')
         self.btn_next.setToolTip('下一个')
         self.btn_next.clicked.connect(self._play_next)
         btn_row.addWidget(self.btn_next)
@@ -224,7 +223,7 @@ class PlayerTab(QWidget):
 
         header = QHBoxLayout()
         label = QLabel('播放列表')
-        label.setStyleSheet('font-weight: bold; font-size: 14px;')
+        label.setObjectName('PlaylistHeader')
         header.addWidget(label)
         header.addStretch()
         layout.addLayout(header)
@@ -803,30 +802,30 @@ class _FullscreenControlsOverlay(QWidget):
 
     def _build_ui(self):
         self.setFixedHeight(80)
+        t = get_tokens()
 
         container = QWidget(self)
         container.setObjectName('FSControlsContainer')
-        container.setStyleSheet("""
-            #FSControlsContainer {
+        container.setStyleSheet(f"""
+            #FSControlsContainer {{
                 background-color: rgba(0, 0, 0, 200);
-                border-radius: 0px;
-            }
-            QLabel { color: #FFFFFF; font-size: 12px; }
-            QPushButton {
+            }}
+            QLabel {{ color: #FFFFFF; font-size: 12px; }}
+            QPushButton {{
                 color: #FFFFFF; background: transparent;
                 border: 1px solid rgba(255,255,255,80);
-                border-radius: 4px; font-size: 14px;
+                border-radius: 6px; font-size: 14px;
                 padding: 2px 8px;
-            }
-            QPushButton:hover { background: rgba(255,255,255,40); }
-            QSlider::groove:horizontal {
+            }}
+            QPushButton:hover {{ background: rgba(255,255,255,40); }}
+            QSlider::groove:horizontal {{
                 height: 6px; background: rgba(255,255,255,60); border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
+            }}
+            QSlider::handle:horizontal {{
                 width: 14px; height: 14px; margin: -4px 0;
                 background: #FFFFFF; border-radius: 7px;
-            }
-            QSlider::sub-page:horizontal { background: #4FC3F7; border-radius: 3px; }
+            }}
+            QSlider::sub-page:horizontal {{ background: {t.accent}; border-radius: 3px; }}
         """)
 
         layout = QVBoxLayout(self)

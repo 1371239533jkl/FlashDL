@@ -19,6 +19,7 @@ from data.database import Database
 from utils.format_utils import format_size
 from utils.signal_bus import signal_bus
 from utils.settings import get as get_setting, set_value as set_setting
+from ui.styles import get_tokens
 
 
 class TaskCard(QFrame):
@@ -39,7 +40,7 @@ class TaskCard(QFrame):
         # 第一行: 文件名 + 文件大小
         row1 = QHBoxLayout()
         self.name_label = QLabel(info.get('file_name', '准备中...'))
-        self.name_label.setStyleSheet('font-weight: bold; font-size: 14px;')
+        self.name_label.setObjectName('BoldLabel')
         row1.addWidget(self.name_label)
         row1.addStretch()
         total = info.get('total_size', -1)
@@ -173,7 +174,9 @@ class TaskCard(QFrame):
         self._update_button_states()
         # 从失败重试时，恢复默认文字颜色
         if status != DownloadTask.FAILED:
-            self.speed_label.setStyleSheet('')
+            self.speed_label.setObjectName('')
+            self.speed_label.style().unpolish(self.speed_label)
+            self.speed_label.style().polish(self.speed_label)
         status_map = {
             DownloadTask.WAITING: self._queue_info or '等待中',
             DownloadTask.DOWNLOADING: '下载中',
@@ -193,7 +196,9 @@ class TaskCard(QFrame):
         self._is_video = ext in config.VIDEO_EXTENSIONS
         self.progress_bar.setValue(100)
         self.speed_label.setText('已完成')
-        self.speed_label.setStyleSheet('color: #66BB6A;')
+        self.speed_label.setObjectName('StatusSuccess')
+        self.speed_label.style().unpolish(self.speed_label)
+        self.speed_label.style().polish(self.speed_label)
         self.time_label.setText('')
         self._update_button_states()
 
@@ -247,7 +252,10 @@ class TaskCard(QFrame):
     def _retry(self):
         """重试失败的任务（断点续传）"""
         self.download_manager.retry_task(self.task_id)
-        self.speed_label.setStyleSheet('')
+        # 重置内联样式为默认（对象名恢复为默认标签）"""
+        self.speed_label.setObjectName('')
+        self.speed_label.style().unpolish(self.speed_label)
+        self.speed_label.style().polish(self.speed_label)
 
     def _open_file(self):
         if self._file_path and os.path.exists(self._file_path):
@@ -425,9 +433,10 @@ class _DropIndicator(QFrame):
             self.raise_()
 
     def paintEvent(self, event):
+        t = get_tokens()
         painter = QPainter(self)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor('#4FC3F7'))
+        painter.setBrush(QColor(t.accent))
         painter.drawRoundedRect(self.rect(), 1, 1)
 
 
@@ -476,8 +485,7 @@ class DownloadTab(QWidget):
 
         # 状态提示
         self.status_label = QLabel()
-        self.status_label.setObjectName('SecondaryLabel')
-        self.status_label.setStyleSheet('color: #66BB6A; font-size: 12px; padding-left: 65px;')
+        self.status_label.setObjectName('StatusInfo')
         self.status_label.hide()
         input_layout.addWidget(self.status_label)
 
@@ -594,10 +602,9 @@ class DownloadTab(QWidget):
     def _show_status(self, message: str, is_error: bool = False):
         """显示底部状态提示，3秒后自动消失"""
         self.status_label.setText(message)
-        if is_error:
-            self.status_label.setStyleSheet('color: #EF5350; font-size: 12px; padding-left: 65px;')
-        else:
-            self.status_label.setStyleSheet('color: #66BB6A; font-size: 12px; padding-left: 65px;')
+        self.status_label.setObjectName('StatusError' if is_error else 'StatusSuccess')
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
         self.status_label.show()
         QTimer.singleShot(3000, self.status_label.hide)
 
@@ -669,7 +676,9 @@ class DownloadTab(QWidget):
         card = self._cards.get(task_id)
         if card:
             card.speed_label.setText(f'失败: {error}')
-            card.speed_label.setStyleSheet('color: #EF5350;')
+            card.speed_label.setObjectName('StatusError')
+            card.speed_label.style().unpolish(card.speed_label)
+            card.speed_label.style().polish(card.speed_label)
 
         # 保存失败记录
         task = self.download_manager.tasks.get(task_id)

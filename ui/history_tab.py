@@ -24,7 +24,7 @@ class HistoryCard(QFrame):
         self.record = record
         self.db = db
         self.parent_tab = parent_tab
-        self.setObjectName('TaskCard')
+        self.setObjectName('HistoryCard')
         self._setup_ui()
 
     def _setup_ui(self):
@@ -35,10 +35,9 @@ class HistoryCard(QFrame):
         row1 = QHBoxLayout()
         status = self.record.get('status', '')
         icon = '✓' if status == 'completed' else '✗'
-        color = '#66BB6A' if status == 'completed' else '#EF5350'
 
         name_label = QLabel(f'{icon} {self.record.get("file_name", "未知文件")}')
-        name_label.setStyleSheet(f'font-weight: bold; font-size: 14px; color: {color};')
+        name_label.setObjectName('BoldLabel')
         row1.addWidget(name_label)
         row1.addStretch()
 
@@ -109,14 +108,15 @@ class HistoryCard(QFrame):
 
     @staticmethod
     def _make_play_icon() -> QIcon:
-        """绘制播放三角形图标"""
+        """绘制播放三角形图标 (主题自适应)"""
+        from ui.styles import get_tokens
+        t = get_tokens()
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor('#CCCCCC'))
-        # 画三角形
+        p.setBrush(QColor(t.text_secondary))
         path = QPainterPath()
         path.moveTo(3, 2)
         path.lineTo(3, 14)
@@ -128,15 +128,16 @@ class HistoryCard(QFrame):
 
     @staticmethod
     def _make_folder_icon() -> QIcon:
-        """绘制文件夹图标"""
+        """绘制文件夹图标 (主题自适应)"""
+        from ui.styles import get_tokens
+        t = get_tokens()
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor('#CCCCCC'), 1.5)
+        pen = QPen(QColor(t.text_secondary), 1.5)
         p.setPen(pen)
-        p.setBrush(QColor('#CCCCCC'))
-        # 文件夹主体（梯形+矩形）
+        p.setBrush(QColor(t.text_secondary))
         path = QPainterPath()
         path.moveTo(2, 4)
         path.lineTo(6, 4)
@@ -152,12 +153,16 @@ class HistoryCard(QFrame):
 
     @staticmethod
     def _make_delete_icon() -> QIcon:
-        """绘制删除 X 图标"""
+        """绘制删除 X 图标 (主题自适应)"""
+        from ui.styles import get_tokens
+        t = get_tokens()
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor('#CCCCCC'), 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(t.error))
+        pen = QPen(QColor(t.text_secondary), 2)
         p.setPen(pen)
         p.drawLine(3, 3, 13, 13)
         p.drawLine(13, 3, 3, 13)
@@ -219,12 +224,16 @@ class HistoryTab(QWidget):
         ]
         for key, label in filters:
             btn = QPushButton(label)
+            btn.setObjectName('FilterChip')
             btn.setCheckable(True)
             btn.setFixedHeight(26)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, k=key: self._set_filter(k))
             self._filter_btns[key] = btn
             filter_row.addWidget(btn)
+
+        # 默认选中"全部"
+        self._filter_btns['all'].setChecked(True)
 
         filter_row.addStretch()
         layout.addLayout(filter_row)
@@ -245,9 +254,8 @@ class HistoryTab(QWidget):
 
         # 空状态提示
         self.empty_label = QLabel('暂无下载历史')
-        self.empty_label.setObjectName('SecondaryLabel')
+        self.empty_label.setObjectName('EmptyLabel')
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet('font-size: 16px; padding: 40px;')
         layout.addWidget(self.empty_label)
 
         self._update_filter_style()
@@ -255,34 +263,13 @@ class HistoryTab(QWidget):
     def _set_filter(self, filter_key: str):
         """切换过滤器"""
         self._current_filter = filter_key
-        self._update_filter_style()
+        for key, btn in self._filter_btns.items():
+            btn.setChecked(key == filter_key)
         self.refresh()
 
     def _update_filter_style(self):
-        """更新过滤器按钮样式"""
-        active_color = '#89B4FA'
-        inactive_bg = '#313244'
-        inactive_text = '#CDD6F4'
-        for key, btn in self._filter_btns.items():
-            if key == self._current_filter:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {active_color}; color: #1E1E2E;
-                        border-radius: 13px; padding: 0 14px;
-                        font-size: 12px; font-weight: bold;
-                    }}
-                """)
-            else:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {inactive_bg}; color: {inactive_text};
-                        border-radius: 13px; padding: 0 14px;
-                        font-size: 12px;
-                    }}
-                    QPushButton:hover {{
-                        background: #45475A;
-                    }}
-                """)
+        """过滤器样式由QSS #FilterChip规则统一管理，此方法已废弃"""
+        pass
 
     def refresh(self):
         """刷新历史记录列表"""

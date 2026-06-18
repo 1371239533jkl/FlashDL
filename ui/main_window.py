@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """主窗口 - 无边框窗口、标签页管理、系统托盘"""
 
-from PyQt6.QtCore import Qt, QPoint, QSize
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont
+from PyQt6.QtCore import Qt, QPoint, QSize, QRect
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPolygon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication
@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 
 import config
 from utils.signal_bus import signal_bus
-from ui.styles import get_stylesheet, get_current_theme, set_current_theme
+from ui.styles import get_stylesheet, get_current_theme, set_current_theme, get_tokens
 
 
 class MainWindow(QMainWindow):
@@ -39,20 +39,20 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
     def _create_app_icon(self) -> QIcon:
-        """生成一个简单的应用图标(白色下载箭头)"""
+        """生成应用图标 (accent 渐变背景 + 白色下载箭头)"""
+        t = get_tokens()
         pixmap = QPixmap(64, 64)
-        pixmap.fill(QColor('#1E1E1E'))
+        pixmap.fill(QColor(t.bg_elevated))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
+        # 圆角矩形背景
+        painter.setBrush(QColor(t.accent))
+        painter.drawRoundedRect(QRect(2, 2, 60, 60), 14, 14)
+        # 白色下载箭头
         painter.setBrush(QColor('#FFFFFF'))
-        # 绘制向下箭头
-        from PyQt6.QtGui import QPolygon
-        from PyQt6.QtCore import QRect
-        # 矩形部分(箭杆)
-        painter.drawRect(QRect(24, 10, 16, 28))
-        # 三角部分(箭头)
-        arrow = QPolygon([QPoint(14, 36), QPoint(50, 36), QPoint(32, 54)])
+        painter.drawRect(QRect(24, 14, 16, 24))
+        arrow = QPolygon([QPoint(14, 36), QPoint(50, 36), QPoint(32, 50)])
         painter.drawPolygon(arrow)
         painter.end()
         return QIcon(pixmap)
@@ -212,11 +212,22 @@ class MainWindow(QMainWindow):
         current = get_current_theme()
         new_theme = 'light' if current == 'dark' else 'dark'
         set_current_theme(new_theme)
-        QApplication.instance().setStyleSheet(get_stylesheet(new_theme))
-        # 更新按钮图标: 深色主题显示太阳(切到浅), 浅色主题显示月亮(切到深)
+        app = QApplication.instance()
+        app.setStyleSheet(get_stylesheet(new_theme))
+        # 强制立即处理样式重绘（避免等待事件循环空闲）
+        app.processEvents()
+        # 更新按钮图标
         self._btn_theme.setText('☀' if new_theme == 'dark' else '🌙')
+        # 重新生成应用图标
+        self._app_icon = self._create_app_icon()
+        self.setWindowIcon(self._app_icon)
+        self.tray_icon.setIcon(self._app_icon)
         # 保持视频区域始终黑色
-        self.player_tab.video_widget.setStyleSheet('background-color: #000000;')
+        self.player_tab.video_widget.setStyleSheet('background-color: #000000; border-radius: 6px;')
+        # 强制重绘主窗口
+        self.repaint()
+        # 刷新需要重建UI的子标签页（历史记录的图标颜色依赖主题）
+        self.history_tab.refresh()
 
     # === 窗口拖动与缩放 ===
     def mousePressEvent(self, event):
