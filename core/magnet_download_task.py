@@ -13,6 +13,9 @@ import config
 from core.magnet_session_manager import MagnetSessionManager, is_libtorrent_available
 from core.url_validator import validate_url
 from utils.format_utils import format_size, format_speed, format_time, ensure_long_path
+from utils.logger import get_logger
+
+_log = get_logger('magnet_task')
 
 if is_libtorrent_available():
     import libtorrent as lt
@@ -196,7 +199,7 @@ class MagnetDownloadTask(QObject):
         try:
             status = self._handle.status()
         except Exception as e:
-            print(f'[警告] 获取种子状态失败: {self.task_id} - {e}', file=sys.stderr)
+            _log.warning(f'获取种子状态失败: {self.task_id} - {e}')
             self._handle_invalid_count += 1
             if self._handle_invalid_count >= 10:
                 self._timer.stop()
@@ -284,9 +287,9 @@ class MagnetDownloadTask(QObject):
                     self.file_name = name
                 self.total_size = torrent_info.total_size()
             else:
-                print(f'[警告] 磁力元数据无效: {self.task_id}', file=sys.stderr)
+                _log.warning(f'磁力元数据无效: {self.task_id}')
         except Exception as e:
-            print(f'[警告] 解析磁力元数据失败: {self.task_id} - {e}', file=sys.stderr)
+            _log.warning(f'解析磁力元数据失败: {self.task_id} - {e}')
             # 保持默认值（已初始化的空文件名/unknown大小）
 
         self._set_status(self.DOWNLOADING)
@@ -343,7 +346,7 @@ class MagnetDownloadTask(QObject):
                 json.dump(state, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, final_path)
         except Exception as e:
-            print(f'[警告] 磁力任务状态保存失败: {self.task_id} - {e}', file=sys.stderr)
+            _log.warning(f'磁力任务状态保存失败: {self.task_id} - {e}')
 
     def _save_resume_data(self):
         """保存 BT 断点续传数据（可能有短暂阻塞，仅在暂停时调用）"""
@@ -365,7 +368,7 @@ class MagnetDownloadTask(QObject):
                     json.dump(state, f, ensure_ascii=False, indent=2)
                 os.replace(tmp_path, state_file)
         except Exception as e:
-            print(f'[警告] 断点数据保存失败: {self.task_id} - {e}', file=sys.stderr)
+            _log.warning(f'断点数据保存失败: {self.task_id} - {e}')
 
     @classmethod
     def load_from_state(cls, task_dir: str) -> 'MagnetDownloadTask':
@@ -378,7 +381,7 @@ class MagnetDownloadTask(QObject):
             with open(state_file, 'r', encoding='utf-8') as f:
                 state = json.load(f)
         except Exception as e:
-            print(f'[警告] 磁力任务状态文件损坏: {state_file} - {e}', file=sys.stderr)
+            _log.warning(f'磁力任务状态文件损坏: {state_file} - {e}')
             return None
 
         if state.get('task_type') != 'magnet':
@@ -415,7 +418,7 @@ class MagnetDownloadTask(QObject):
                 task.error_message = '无法恢复种子连接，请重新添加'
                 task._set_status(task.FAILED)
         except Exception as e:
-            print(f'[警告] 磁力任务恢复失败: {task.task_id} - {e}', file=sys.stderr)
+            _log.warning(f'磁力任务恢复失败: {task.task_id} - {e}')
             task.error_message = f'恢复失败: {e}'
             task._set_status(task.FAILED)
 

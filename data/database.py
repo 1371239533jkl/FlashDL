@@ -2,6 +2,7 @@
 """数据库模块 - SQLite历史记录管理"""
 
 import sqlite3
+import csv
 import os
 from typing import Optional
 
@@ -99,3 +100,72 @@ class Database:
                 'SELECT * FROM download_history WHERE task_id = ?', (task_id,)
             ).fetchone()
             return dict(row) if row else None
+
+    # ═══ 分页查询 ═══
+
+    def get_records_page(self, page: int, page_size: int = 50) -> tuple[list[dict], int]:
+        """分页获取所有历史记录，返回 (records, total_count)"""
+        with self._connect() as conn:
+            total = conn.execute('SELECT COUNT(*) FROM download_history').fetchone()[0]
+            rows = conn.execute(
+                'SELECT * FROM download_history ORDER BY id DESC LIMIT ? OFFSET ?',
+                (page_size, page * page_size)
+            ).fetchall()
+            return [dict(row) for row in rows], total
+
+    def search_records_page(self, keyword: str, page: int, page_size: int = 50) -> tuple[list[dict], int]:
+        """分页搜索历史记录"""
+        with self._connect() as conn:
+            total = conn.execute(
+                'SELECT COUNT(*) FROM download_history WHERE file_name LIKE ?',
+                (f'%{keyword}%',)
+            ).fetchone()[0]
+            rows = conn.execute(
+                'SELECT * FROM download_history WHERE file_name LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?',
+                (f'%{keyword}%', page_size, page * page_size)
+            ).fetchall()
+            return [dict(row) for row in rows], total
+
+    def get_records_by_status_page(self, status: str, page: int,
+                                    page_size: int = 50, keyword: str = '') -> tuple[list[dict], int]:
+        """分页按状态过滤历史记录"""
+        with self._connect() as conn:
+            if keyword:
+                total = conn.execute(
+                    'SELECT COUNT(*) FROM download_history WHERE status = ? AND file_name LIKE ?',
+                    (status, f'%{keyword}%')
+                ).fetchone()[0]
+                rows = conn.execute(
+                    'SELECT * FROM download_history WHERE status = ? AND file_name LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?',
+                    (status, f'%{keyword}%', page_size, page * page_size)
+                ).fetchall()
+            else:
+                total = conn.execute(
+                    'SELECT COUNT(*) FROM download_history WHERE status = ?',
+                    (status,)
+                ).fetchone()[0]
+                rows = conn.execute(
+                    'SELECT * FROM download_history WHERE status = ? ORDER BY id DESC LIMIT ? OFFSET ?',
+                    (status, page_size, page * page_size)
+                ).fetchall()
+            return [dict(row) for row in rows], total
+
+    # ═══ 导出 ═══
+
+    def export_csv(self, file_path: str) -> int:
+        """导出所有历史记录到 CSV 文件，返回导出条数"""
+        records = self.get_all_records()
+        with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(['文件名', 'URL', '保存路径', '文件大小(字节)', '状态', '创建时间', '完成时间'])
+            for r in records:
+                writer.writerow([
+                    r.get('file_name', ''),
+                    r.get('url', ''),
+                    r.get('save_path', ''),
+                    r.get('file_size', 0),
+                    r.get('status', ''),
+                    r.get('created_time', ''),
+                    r.get('completed_time', ''),
+                ])
+        return len(records)

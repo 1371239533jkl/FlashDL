@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QFrame, QMessageBox
+    QPushButton, QScrollArea, QFrame, QMessageBox, QFileDialog
 )
 
 from data.database import Database
@@ -179,13 +179,23 @@ class HistoryCard(QFrame):
 class HistoryTab(QWidget):
     """历史记录标签页"""
 
+    PAGE_SIZE = 50  # 每页加载条数
+
     def __init__(self):
         super().__init__()
         self.db = Database()
         self._cards = []
         self._current_filter = 'all'  # all | completed | failed
+        self._page = 0
+        self._total_count = 0
+        self._loading = False  # 防止重复触发加载
         self._setup_ui()
+        # 搜索防抖：300ms 内只触发一次查询
         from PyQt6.QtCore import QTimer
+        self._search_timer = QTimer()
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(self._do_search)
         QTimer.singleShot(100, self.refresh)
 
     def _setup_ui(self):
@@ -204,6 +214,11 @@ class HistoryTab(QWidget):
         btn_refresh.setFixedWidth(60)
         btn_refresh.clicked.connect(self.refresh)
         top_row.addWidget(btn_refresh)
+
+        btn_export = QPushButton('导出 CSV')
+        btn_export.setFixedWidth(80)
+        btn_export.clicked.connect(self._export_csv)
+        top_row.addWidget(btn_export)
 
         btn_clear = QPushButton('清空历史')
         btn_clear.setFixedWidth(80)
@@ -242,6 +257,9 @@ class HistoryTab(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 滚动触底加载下一页
+        scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        self._scroll_area = scroll
 
         self._list_widget = QWidget()
         self._list_layout = QVBoxLayout(self._list_widget)
@@ -272,21 +290,38 @@ class HistoryTab(QWidget):
         pass
 
     def refresh(self):
-        """刷新历史记录列表"""
+        """刷新历史记录列表（重置分页，加载第一页）"""
+        self._page = 0
+        self._total_count = 0
+        self._clear_cards()
+        self._load_more()
+
+    def _load_more(self):
+        """加载下一页历史记录"""
+        if self._loading:
+            return
+        # 检查是否还有更多数据
+        if self._page > 0 and len(self._cards) >= self._total_count:
+            return
+        self._loading = True
         keyword = self.search_input.text().strip()
 
         if self._current_filter == 'all':
             if keyword:
-                records = self.db.search_records(keyword)
+                records, total = self.db.search_records_page(keyword, self._page, self.PAGE_SIZE)
             else:
-                records = self.db.get_all_records()
+                records, total = self.db.get_records_page(self._page, self.PAGE_SIZE)
         else:
-            records = self.db.get_records_by_status(self._current_filter, keyword)
+            records, total = self.db.get_records_by_status_page(
+                self._current_filter, self._page, self.PAGE_SIZE, keyword
+            )
 
-        self._clear_cards()
+        self._total_count = total
+        self._page += 1
 
-        if not records:
+        if not records and not self._cards:
             self.empty_label.show()
+            self._loading = False
             return
 
         self.empty_label.hide()
@@ -294,8 +329,20 @@ class HistoryTab(QWidget):
             card = HistoryCard(record, self.db, self)
             self._cards.append(card)
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+        self._loading = False
+
+    def _on_scroll(self, value):
+        """滚动条触底时加载下一页"""
+        scrollbar = self._scroll_area.verticalScrollBar()
+        if value >= scrollbar.maximum() - 50:
+            self._load_more()
 
     def _on_search(self, text: str):
+        """搜索输入变化时重启防抖计时器"""
+        self._search_timer.start()
+
+    def _do_search(self):
+        """防抖结束后执行搜索刷新"""
         self.refresh()
 
     def _clear_all(self):
@@ -304,6 +351,20 @@ class HistoryTab(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             self.db.clear_all()
             self.refresh()
+
+    def _export_csv(self):
+        """导出历史记录为 CSV 文件"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, '导出历史记录', 'download_history.csv',
+            'CSV 文件 (*.csv);;所有文件 (*)'
+        )
+        if not file_path:
+            return
+        try:
+            count = self.db.export_csv(file_path)
+            QMessageBox.information(self, '导出成功', f'成功导出 {count} 条历史记录到:\n{file_path}')
+        except Exception as e:
+            QMessageBox.warning(self, '导出失败', f'导出失败: {e}')
 
     def _clear_cards(self):
         for card in self._cards:

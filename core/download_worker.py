@@ -31,7 +31,7 @@ class DownloadWorker(QThread):
 
     def __init__(self, chunk_id: int, url: str, output_path: str,
                  start_byte: int, end_byte: int, downloaded_bytes: int = 0,
-                 headers: dict = None):
+                 headers: dict = None, speed_limit: int = 0):
         super().__init__()
         self.chunk_id = chunk_id
         self.url = url
@@ -40,6 +40,7 @@ class DownloadWorker(QThread):
         self.end_byte = end_byte
         self.downloaded_bytes = downloaded_bytes
         self._custom_headers = headers or {}
+        self._speed_limit = speed_limit  # 每 worker 速度限制 (bytes/s)，0=无限制
         self._paused = False
         # 使用 Event 保证线程间可见性
         self._stopped = threading.Event()
@@ -142,11 +143,11 @@ class DownloadWorker(QThread):
                         self.downloaded_bytes += data_len
                         self.chunk_progress.emit(self.chunk_id, data_len)
 
-                        # 速度限制：如果配置了全局限速，控制每个分块的速率
-                        if config.DOWNLOAD_SPEED_LIMIT > 0:
+                        # 速度限制：如果配置了限速，控制每个分块的速率
+                        if self._speed_limit > 0:
                             chunk_bytes = self.downloaded_bytes - chunk_downloaded_at_start
                             elapsed = time.time() - chunk_start_time
-                            expected_time = chunk_bytes / config.DOWNLOAD_SPEED_LIMIT
+                            expected_time = chunk_bytes / self._speed_limit
                             if elapsed < expected_time:
                                 sleep_time = expected_time - elapsed
                                 while sleep_time > 0 and not self._check_stopped():

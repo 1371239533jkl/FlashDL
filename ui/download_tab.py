@@ -2,8 +2,10 @@
 """下载管理标签页 - URL输入、下载列表、进度显示、操作按钮"""
 
 import os
+import re
 import subprocess
 import time
+from collections import deque
 from PyQt6.QtCore import Qt, QMimeData, QPoint, QTimer
 from PyQt6.QtGui import QDrag, QPaintEvent, QPainter, QColor
 from PyQt6.QtWidgets import (
@@ -279,6 +281,37 @@ class TaskCard(QFrame):
             return
         signal_bus.play_video.emit(save_path)
 
+    def contextMenuEvent(self, event):
+        """右键菜单：复制链接 / 打开文件夹 / 查看详情"""
+        menu = QMenu(self)
+        copy_url_action = menu.addAction('复制链接')
+        open_folder_action = menu.addAction('打开文件夹')
+        menu.addSeparator()
+        detail_action = menu.addAction('查看详情')
+        action = menu.exec(event.globalPosition().toPoint())
+        if action == copy_url_action:
+            task = self.download_manager.tasks.get(self.task_id)
+            if task and hasattr(task, 'url'):
+                QApplication.clipboard().setText(task.url)
+        elif action == open_folder_action:
+            if self._file_path and os.path.exists(self._file_path):
+                subprocess.Popen(f'explorer /select,"{self._file_path}"')
+        elif action == detail_action:
+            self._show_detail_dialog()
+
+    def _show_detail_dialog(self):
+        """显示任务详情对话框"""
+        task = self.download_manager.tasks.get(self.task_id)
+        if not task:
+            return
+        info_lines = [
+            f'文件名: {task.file_name or "未知"}',
+            f'大小: {format_size(task.total_size) if task.total_size > 0 else "未知"}',
+            f'状态: {task.status}',
+            f'URL: {getattr(task, "url", "N/A")}',
+        ]
+        QMessageBox.information(self, '任务详情', '\n'.join(info_lines))
+
 
 class _ReorderWidget(QWidget):
     """支持拖拽排序的下载列表容器"""
@@ -448,8 +481,16 @@ class DownloadTab(QWidget):
         self.download_manager = download_manager
         self.db = Database()
         self._cards: dict[str, TaskCard] = {}
+        # 剪贴板监控：记录最近 100 条已处理 URL 防止重复
+        self._recent_urls: deque = deque(maxlen=100)
+        # 后台 Worker 引用（防止 GC 回收导致线程中断）
+        self._prepare_workers: list = []
+        self._cleanup_workers: list = []
         self._setup_ui()
         self._connect_signals()
+        # 剪贴板监听（可通过设置开关）
+        clipboard = QApplication.clipboard()
+        clipboard.dataChanged.connect(self._on_clipboard_changed)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -522,6 +563,30 @@ class DownloadTab(QWidget):
         # 操作按钮行
         action_row = QHBoxLayout()
         action_row.addStretch()
+
+        # 速度限制下拉
+        speed_label = QLabel('限速:')
+        speed_label.setObjectName('SecondaryLabel')
+        action_row.addWidget(speed_label)
+        self.speed_limit_combo = QComboBox()
+        self.speed_limit_combo.addItem('无限制', 0)
+        self.speed_limit_combo.addItem('100 KB/s', 100 * 1024)
+        self.speed_limit_combo.addItem('500 KB/s', 500 * 1024)
+        self.speed_limit_combo.addItem('1 MB/s', 1024 * 1024)
+        self.speed_limit_combo.addItem('2 MB/s', 2 * 1024 * 1024)
+        self.speed_limit_combo.addItem('5 MB/s', 5 * 1024 * 1024)
+        self.speed_limit_combo.addItem('10 MB/s', 10 * 1024 * 1024)
+        # 恢复上次设置
+        saved_speed = get_setting('download_speed_limit', config.DOWNLOAD_SPEED_LIMIT)
+        for i in range(self.speed_limit_combo.count()):
+            if self.speed_limit_combo.itemData(i) == saved_speed:
+                self.speed_limit_combo.setCurrentIndex(i)
+                config.DOWNLOAD_SPEED_LIMIT = saved_speed
+                break
+        self.speed_limit_combo.currentIndexChanged.connect(self._on_speed_limit_changed)
+        self.speed_limit_combo.setFixedWidth(90)
+        action_row.addWidget(self.speed_limit_combo)
+
         btn_pause_all = QPushButton('全部暂停')
         btn_pause_all.clicked.connect(self._pause_all)
         action_row.addWidget(btn_pause_all)
@@ -553,7 +618,7 @@ class DownloadTab(QWidget):
         signal_bus.task_failed.connect(self._on_task_failed)
 
     def _add_task(self):
-        """添加下载任务（支持批量多行URL）"""
+        """添加下载任务（支持批量多行URL，异步准备）"""
         raw_text = self.url_input.toPlainText().strip()
         if not raw_text:
             return
@@ -573,10 +638,18 @@ class DownloadTab(QWidget):
         for url in urls:
             try:
                 task = self.download_manager.create_task(url, save_dir, '', thread_count, headers=headers)
+                # 立即创建卡片（显示"准备中..."）
                 card = TaskCard(task.task_id, task.get_info(), self.download_manager)
                 self._cards[task.task_id] = card
                 self._list_layout.insertWidget(self._list_layout.count() - 1, card)
-                self.download_manager.start_task(task.task_id)
+                # 后台异步执行 prepare()
+                from core.task_worker import PrepareWorker
+                worker = PrepareWorker(task)
+                worker.prepared.connect(self._on_prepare_done)
+                worker.failed.connect(self._on_prepare_failed)
+                self._prepare_workers.append(worker)
+                worker.finished.connect(lambda w=worker: self._prepare_workers.remove(w) if w in self._prepare_workers else None)
+                worker.start()
                 added_count += 1
             except RuntimeError as e:
                 errors.append(f'[{url[:50]}...] {e}')
@@ -588,7 +661,7 @@ class DownloadTab(QWidget):
 
         # 提示添加结果
         if not errors and added_count > 0:
-            self._show_status(f'成功添加 {added_count} 个下载任务')
+            self._show_status(f'已添加 {added_count} 个任务，准备中...')
         elif errors:
             self._show_status(f'添加完成: {added_count} 成功, {len(errors)} 失败',
                               is_error=True)
@@ -596,6 +669,38 @@ class DownloadTab(QWidget):
                 self, '批量添加结果',
                 f'成功添加 {added_count} 个任务\n'
                 f'失败 {len(errors)} 个:\n' + '\n'.join(errors)
+            )
+
+    def _on_prepare_done(self, task_id: str, info: dict):
+        """后台 prepare() 完成后，启动任务并更新卡片"""
+        # 更新卡片显示（文件名、大小等）
+        card = self._cards.get(task_id)
+        if card:
+            card.name_label.setText(info.get('file_name', ''))
+            total = info.get('total_size', -1)
+            if total > 0:
+                card.size_label.setText(format_size(total))
+        # 启动下载
+        self.download_manager.start_task(task_id)
+
+    def _on_prepare_failed(self, task_id: str, error: str):
+        """后台 prepare() 失败时更新卡片"""
+        card = self._cards.get(task_id)
+        if card:
+            card.speed_label.setText(f'失败: {error}')
+            card.speed_label.setObjectName('StatusError')
+            card.speed_label.style().unpolish(card.speed_label)
+            card.speed_label.style().polish(card.speed_label)
+            card.btn_pause.hide()
+            card.btn_cancel.hide()
+            card.btn_retry.show()
+        # 记录失败到数据库
+        task = self.download_manager.tasks.get(task_id)
+        if task:
+            self.db.add_record(
+                task_id=task_id, url=task.url, file_name=task.file_name or '',
+                save_path='', file_size=0,
+                status='failed', created_time=task.created_time
             )
 
 
@@ -661,6 +766,11 @@ class DownloadTab(QWidget):
         card = self._cards.get(task_id)
         if card:
             card.set_completed(file_path)
+            # 短暂高亮卡片（accent 边框，2 秒后恢复）
+            card.setObjectName('TaskCardCompleted')
+            card.style().unpolish(card)
+            card.style().polish(card)
+            QTimer.singleShot(2000, lambda c=card: self._reset_card_highlight(c))
 
         # 保存到历史记录
         task = self.download_manager.tasks.get(task_id)
@@ -671,6 +781,13 @@ class DownloadTab(QWidget):
                 status='completed', created_time=task.created_time,
                 completed_time=time.strftime('%Y-%m-%d %H:%M:%S')
             )
+
+    def _reset_card_highlight(self, card):
+        """恢复任务卡片默认样式"""
+        if card and card.objectName() != 'TaskCard':
+            card.setObjectName('TaskCard')
+            card.style().unpolish(card)
+            card.style().polish(card)
 
     def _on_task_failed(self, task_id: str, error: str):
         card = self._cards.get(task_id)
@@ -694,6 +811,55 @@ class DownloadTab(QWidget):
             if task.status == DownloadTask.DOWNLOADING:
                 self.download_manager.pause_task(task_id)
 
+    def _on_speed_limit_changed(self, index):
+        """速度限制下拉改变时，更新全局限速配置"""
+        speed_limit = self.speed_limit_combo.itemData(index)
+        if speed_limit is not None:
+            config.DOWNLOAD_SPEED_LIMIT = speed_limit
+            set_setting('download_speed_limit', speed_limit)
+
+    # URL 匹配正则（HTTP/HTTPS 和磁力链接）
+    _URL_RE = re.compile(
+        r'(https?://\S+|magnet:\?xt=urn:btih:[A-Za-z0-9]+[^\s]*)',
+        re.IGNORECASE
+    )
+
+    def _on_clipboard_changed(self):
+        """剪贴板内容变化时，检测是否包含可下载的链接"""
+        if not get_setting('clipboard_monitor', True):
+            return
+        try:
+            clipboard = QApplication.clipboard()
+            text = clipboard.text()
+        except Exception:
+            return
+        if not text:
+            return
+        # 智能防抖：内容相同则跳过（解决 Windows 剪贴板锁重复触发），
+        # 内容不同则立即处理（快速复制多个链接不会丢失）
+        if hasattr(self, '_last_clipboard_text') and self._last_clipboard_text == text:
+            return
+        self._last_clipboard_text = text
+        urls = self._URL_RE.findall(text)
+        if not urls:
+            return
+        # 过滤已处理过的 URL
+        new_urls = [u for u in urls if u not in self._recent_urls]
+        if not new_urls:
+            return
+        # 将新 URL 填入输入框（每行一个）
+        current = self.url_input.toPlainText().strip()
+        to_add = '\n'.join(new_urls)
+        if current:
+            self.url_input.setPlainText(current + '\n' + to_add)
+        else:
+            self.url_input.setPlainText(to_add)
+        # 标记为已处理
+        for u in new_urls:
+            self._recent_urls.append(u)
+        # 提示用户
+        self._show_status(f'检测到 {len(new_urls)} 条新链接，已填入输入框')
+
     def _clear_completed(self):
         """清除已完成的下载任务（加确认）"""
         to_remove = []
@@ -713,10 +879,17 @@ class DownloadTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # UI 立即移除卡片
         for task_id in to_remove:
             card = self._cards.pop(task_id)
+            card.hide()  # 先隐藏，立即生效
             self._list_layout.removeWidget(card)
             card.deleteLater()
+        # 强制刷新布局
+        self._list_layout.activate()
+        self._list_widget.updateGeometry()
+        # 后台异步清理（已完成的任务只需从内存移除，无需 cancel）
+        for task_id in to_remove:
             self.download_manager.remove_task(task_id)
 
     def _clear_all_tasks(self):
@@ -741,8 +914,28 @@ class DownloadTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # UI 立即移除所有卡片
         for task_id in list(self._cards.keys()):
             card = self._cards.pop(task_id)
+            card.hide()  # 先隐藏，立即生效
             self._list_layout.removeWidget(card)
             card.deleteLater()
-            self.download_manager.remove_task(task_id)
+        # 强制刷新布局
+        self._list_layout.activate()
+        self._list_widget.updateGeometry()
+        # 后台异步清理活跃任务（cancel + 删除临时文件）
+        from core.task_worker import CleanupWorker
+        for task_id in list(self.download_manager.tasks.keys()):
+            task = self.download_manager._tasks.pop(task_id, None)
+            if task:
+                if task.status == 'completed':
+                    continue  # 已完成无需清理
+                worker = CleanupWorker(task)
+                worker.cleaned.connect(self._on_cleanup_done)
+                self._cleanup_workers.append(worker)
+                worker.finished.connect(lambda w=worker: self._cleanup_workers.remove(w) if w in self._cleanup_workers else None)
+                worker.start()
+
+    def _on_cleanup_done(self, task_id: str):
+        """后台清理完成"""
+        pass  # 卡片已在 UI 中移除，无需额外操作

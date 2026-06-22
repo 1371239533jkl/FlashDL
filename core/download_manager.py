@@ -9,6 +9,7 @@ import config
 from core.download_task import DownloadTask
 from core.magnet_session_manager import is_libtorrent_available
 from utils.signal_bus import signal_bus
+from utils.settings import get as get_setting
 
 # 磁力任务的活跃状态集合
 _ACTIVE_STATUSES = {'downloading', 'resolving_metadata'}
@@ -48,6 +49,10 @@ class DownloadManager(QObject):
         self._register_task(task)
         return task
 
+    @property
+    def _max_concurrent(self) -> int:
+        return get_setting('max_concurrent_tasks', config.MAX_CONCURRENT_TASKS)
+
     def start_task(self, task_id: str) -> bool:
         """准备并启动一个任务"""
         task = self._tasks.get(task_id)
@@ -62,7 +67,7 @@ class DownloadManager(QObject):
 
         # 检查并发限制(downloading 和 resolving_metadata 都算活跃)
         active = sum(1 for t in self._tasks.values() if t.status in _ACTIVE_STATUSES)
-        if active >= config.MAX_CONCURRENT_TASKS:
+        if active >= self._max_concurrent:
             return False
 
         task.start()
@@ -79,7 +84,7 @@ class DownloadManager(QObject):
             return False
 
         active = sum(1 for t in self._tasks.values() if t.status in _ACTIVE_STATUSES)
-        if active >= config.MAX_CONCURRENT_TASKS:
+        if active >= self._max_concurrent:
             return False
 
         task.resume()
@@ -181,6 +186,14 @@ class DownloadManager(QObject):
     def _on_completed(self, task_id: str, file_path: str):
         signal_bus.task_completed.emit(task_id, file_path)
         signal_bus.show_notification.emit('下载完成', f'{os.path.basename(file_path)} 已下载完成')
+        # 播放提示音（可通过设置关闭）
+        from utils.settings import get as get_setting
+        if get_setting('completion_sound', True):
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:
+                pass
 
     def _on_failed(self, task_id: str, error: str):
         signal_bus.task_failed.emit(task_id, error)
@@ -202,7 +215,7 @@ class DownloadManager(QObject):
         """尝试启动队列中等待的任务（尽可能填满所有空闲槽位）"""
         while True:
             active = sum(1 for t in self._tasks.values() if t.status in _ACTIVE_STATUSES)
-            if active >= config.MAX_CONCURRENT_TASKS:
+            if active >= self._max_concurrent:
                 return
             for task in self._tasks.values():
                 if task.status == 'waiting':

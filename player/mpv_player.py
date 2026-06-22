@@ -10,6 +10,9 @@
 
 import mpv
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from utils.logger import get_logger
+
+_log = get_logger('mpv_player')
 
 
 class MpvPlayer(QObject):
@@ -48,6 +51,7 @@ class MpvPlayer(QObject):
         self._speed = 1.0
         self._sub_delay = 0.0
         self._loaded = False
+        self._poll_error_count = 0  # 轮询失败计数（限频日志用）
 
         # 创建 mpv 实例，嵌入到 container
         wid = int(container.winId())
@@ -128,7 +132,9 @@ class MpvPlayer(QObject):
             if sub_delay != self._sub_delay:
                 self._sub_delay = sub_delay
         except Exception:
-            pass  # mpv 属性读取偶发失败，不阻塞轮询
+            self._poll_error_count += 1
+            if self._poll_error_count % 100 == 1:
+                _log.debug(f'mpv 轮询失败 (累计 {self._poll_error_count} 次)')
 
     # ── 播放控制 ──────────────────────────────────────────────
 
@@ -259,6 +265,33 @@ class MpvPlayer(QObject):
         """获取当前字幕延迟(毫秒)"""
         return int(self._sub_delay * 1000)
 
+    # ── 宽高比 ──────────────────────────────────────────────────
+
+    _ASPECT_RATIOS = ['-1', '16:9', '4:3', '2.35:1']
+    _ASPECT_LABELS = ['原始', '16:9', '4:3', '2.35:1']
+
+    def cycle_aspect_ratio(self) -> str:
+        """循环切换宽高比，返回当前标签文字"""
+        idx = getattr(self, '_aspect_idx', 0)
+        new_idx = (idx + 1) % len(self._ASPECT_RATIOS)
+        self._aspect_idx = new_idx
+        val = self._ASPECT_RATIOS[new_idx]
+        self._mpv.command('set', 'video-aspect-override', val)
+        return self._ASPECT_LABELS[new_idx]
+
+    # ── 截图 ──────────────────────────────────────────────────
+
+    def take_screenshot(self, save_path: str) -> bool:
+        """截取当前视频帧并保存到指定路径，返回是否成功"""
+        if not self._current_file:
+            return False
+        try:
+            normalized = save_path.replace('\\', '/')
+            self._mpv.command('screenshot-to-file', normalized, 'video')
+            return True
+        except Exception:
+            return False
+
     # ── 清理 ──────────────────────────────────────────────────
 
     def cleanup(self):
@@ -267,5 +300,5 @@ class MpvPlayer(QObject):
         try:
             self._mpv.terminate()
         except Exception:
-            pass  # mpv 已退出时 terminate 可能抛异常
+            _log.debug('mpv.terminate() 异常（可能已退出）')
         self._playback_state = self.STOPPED

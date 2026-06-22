@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """主窗口 - 无边框窗口、标签页管理、系统托盘"""
 
-from PyQt6.QtCore import Qt, QPoint, QSize, QRect
+from PyQt6.QtCore import Qt, QPoint, QSize, QRect, QPropertyAnimation
 from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPolygon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication
+    QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication,
+    QGraphicsOpacityEffect
 )
 
 import config
 from utils.signal_bus import signal_bus
+from utils.settings import get as get_setting, set_value as set_setting
 from ui.styles import get_stylesheet, get_current_theme, set_current_theme, get_tokens
 
 
@@ -27,7 +29,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setMinimumSize(config.MIN_WINDOW_WIDTH, config.MIN_WINDOW_HEIGHT)
-        self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
+        self._restore_geometry()
         self.setWindowTitle(config.APP_NAME)
 
         # 生成应用图标
@@ -95,6 +97,14 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.player_tab, '视频播放')
         self.tab_widget.addTab(self.history_tab, '历史记录')
 
+        # 主题切换过渡遮罩
+        self._theme_overlay = QWidget(central)
+        self._theme_overlay.hide()
+        self._theme_overlay_effect = QGraphicsOpacityEffect(self._theme_overlay)
+        self._theme_overlay.setGraphicsEffect(self._theme_overlay_effect)
+        self._theme_overlay_effect.setOpacity(0.0)
+        self._theme_overlay_anim = None
+
     def _create_title_bar(self) -> QWidget:
         """创建自定义标题栏"""
         bar = QWidget()
@@ -116,6 +126,14 @@ class MainWindow(QMainWindow):
         self._btn_theme.setToolTip('切换浅色/深色主题')
         self._btn_theme.clicked.connect(self._toggle_theme)
         layout.addWidget(self._btn_theme)
+
+        # 设置按钮
+        self._btn_settings = QPushButton('⚙')
+        self._btn_settings.setObjectName('TitleBtn')
+        self._btn_settings.setFixedSize(46, config.TITLE_BAR_HEIGHT)
+        self._btn_settings.setToolTip('设置')
+        self._btn_settings.clicked.connect(self._open_settings)
+        layout.addWidget(self._btn_settings)
 
         # 最小化按钮
         btn_min = QPushButton('—')
@@ -201,33 +219,71 @@ class MainWindow(QMainWindow):
 
     def _quit_app(self):
         """退出应用"""
+        self._save_geometry()
         self.download_manager.save_all_tasks()
         self.player_tab.cleanup()       # 保存播放进度等
         self._shutdown_magnet_session()
         self.tray_icon.hide()
         QApplication.quit()
 
+    def _open_settings(self):
+        """打开设置对话框"""
+        from ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        dlg.exec()
+
     def _toggle_theme(self):
-        """切换深色/浅色主题"""
+        """切换深色/浅色主题（带淡入淡出过渡）"""
+        # 停止正在进行的动画
+        if self._theme_overlay_anim is not None:
+            self._theme_overlay_anim.stop()
+            self._theme_overlay_anim = None
+        t = get_tokens()
+        # 设置遮罩为当前主题背景色，完全显示
+        self._theme_overlay.setStyleSheet(f'background-color: {t.bg_primary};')
+        self._theme_overlay.setGeometry(self.centralWidget().rect())
+        self._theme_overlay.raise_()
+        self._theme_overlay.show()
+        self._theme_overlay_effect.setOpacity(1.0)
+        # 淡出遮罩 → 露出新主题
+        self._apply_theme()
+        self._fade_out_overlay()
+
+    def _apply_theme(self):
+        """应用主题切换（不含过渡）"""
         current = get_current_theme()
         new_theme = 'light' if current == 'dark' else 'dark'
         set_current_theme(new_theme)
         app = QApplication.instance()
         app.setStyleSheet(get_stylesheet(new_theme))
-        # 强制立即处理样式重绘（避免等待事件循环空闲）
         app.processEvents()
-        # 更新按钮图标
         self._btn_theme.setText('☀' if new_theme == 'dark' else '🌙')
-        # 重新生成应用图标
         self._app_icon = self._create_app_icon()
         self.setWindowIcon(self._app_icon)
         self.tray_icon.setIcon(self._app_icon)
-        # 保持视频区域始终黑色
         self.player_tab.video_widget.setStyleSheet('background-color: #000000; border-radius: 6px;')
-        # 强制重绘主窗口
         self.repaint()
-        # 刷新需要重建UI的子标签页（历史记录的图标颜色依赖主题）
         self.history_tab.refresh()
+
+    def _fade_out_overlay(self):
+        """淡出主题过渡遮罩（200ms）"""
+        self._theme_overlay_anim = QPropertyAnimation(self._theme_overlay_effect, b'opacity')
+        self._theme_overlay_anim.setDuration(200)
+        self._theme_overlay_anim.setStartValue(1.0)
+        self._theme_overlay_anim.setEndValue(0.0)
+        self._theme_overlay_anim.finished.connect(self._on_overlay_fade_finished)
+        self._theme_overlay_anim.start()
+
+    def _on_overlay_fade_finished(self):
+        """过渡动画结束后清理"""
+        self._theme_overlay.hide()
+        self._theme_overlay_anim = None
+
+    def resizeEvent(self, event):
+        """窗口大小变化时同步遮罩尺寸"""
+        super().resizeEvent(event)
+        if hasattr(self, '_theme_overlay'):
+            self._theme_overlay.setGeometry(self.centralWidget().rect())
 
     # === 窗口拖动与缩放 ===
     def mousePressEvent(self, event):
@@ -320,11 +376,36 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭窗口时保存任务并退出"""
+        self._save_geometry()
         self.download_manager.save_all_tasks()
         self._shutdown_magnet_session()
         self.player_tab.cleanup()
         self.tray_icon.hide()
         event.accept()
+
+    def _save_geometry(self):
+        """保存窗口位置和大小到设置"""
+        geo = self.geometry()
+        set_setting('window_geometry', {
+            'x': geo.x(), 'y': geo.y(),
+            'w': geo.width(), 'h': geo.height(),
+            'maximized': self.isMaximized()
+        })
+
+    def _restore_geometry(self):
+        """从设置恢复窗口位置和大小"""
+        geo_data = get_setting('window_geometry', None)
+        if geo_data:
+            self.resize(geo_data.get('w', config.WINDOW_WIDTH),
+                        geo_data.get('h', config.WINDOW_HEIGHT))
+            self.move(geo_data.get('x', 0), geo_data.get('y', 0))
+            if geo_data.get('maximized', False):
+                self.showMaximized()
+                # 延迟更新按钮文字（此时 _btn_max 可能尚未创建）
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._btn_max.setText('▣') if hasattr(self, '_btn_max') else None)
+        else:
+            self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
 
     def _shutdown_magnet_session(self):
         """安全关闭 libtorrent 会话"""

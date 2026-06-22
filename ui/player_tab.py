@@ -39,6 +39,8 @@ class PlayerTab(QWidget):
         self._refresh_playlist_ui()
         # 安装事件过滤器
         self.video_widget.installEventFilter(self)
+        # 快捷键速查覆盖层
+        self._shortcut_overlay = _ShortcutOverlay(self)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -58,6 +60,7 @@ class PlayerTab(QWidget):
         self.video_widget.setMinimumHeight(300)
         self.video_widget.setStyleSheet('background-color: #000000;')
         self.video_widget.setMouseTracking(True)
+        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         left_layout.addWidget(self.video_widget, 1)
 
         # 全屏覆盖控制条（独立透明窗口）
@@ -201,6 +204,22 @@ class PlayerTab(QWidget):
         btn_row.addWidget(self.sub_delay_label)
 
         btn_row.addSpacing(4)
+
+        # 截图按钮
+        btn_screenshot = QPushButton('📷')
+        btn_screenshot.setFixedSize(38, 34)
+        btn_screenshot.setObjectName('PlayerCtrlBtn')
+        btn_screenshot.setToolTip('截图 (S)')
+        btn_screenshot.clicked.connect(self._take_screenshot)
+        btn_row.addWidget(btn_screenshot)
+
+        # 宽高比按钮
+        self.btn_aspect = QPushButton('原始')
+        self.btn_aspect.setFixedWidth(50)
+        self.btn_aspect.setObjectName('PlayerCtrlBtn')
+        self.btn_aspect.setToolTip('宽高比 (A)')
+        self.btn_aspect.clicked.connect(self._cycle_aspect_ratio)
+        btn_row.addWidget(self.btn_aspect)
 
         # 全屏（画出来的图标按钮）
         btn_fullscreen = QPushButton()
@@ -413,12 +432,27 @@ class PlayerTab(QWidget):
                 if key == Qt.Key.Key_Up:
                     vol = min(100, self.volume_slider.value() + 5)
                     self.volume_slider.setValue(vol)
+                    self.fullscreen_controls._volume_slider.blockSignals(True)
+                    self.fullscreen_controls._volume_slider.setValue(vol)
+                    self.fullscreen_controls._volume_slider.blockSignals(False)
                     self._show_fullscreen_controls()
                     return True
                 if key == Qt.Key.Key_Down:
                     vol = max(0, self.volume_slider.value() - 5)
                     self.volume_slider.setValue(vol)
+                    self.fullscreen_controls._volume_slider.blockSignals(True)
+                    self.fullscreen_controls._volume_slider.setValue(vol)
+                    self.fullscreen_controls._volume_slider.blockSignals(False)
                     self._show_fullscreen_controls()
+                    return True
+                if key == Qt.Key.Key_S:
+                    self._take_screenshot()
+                    return True
+                if key == Qt.Key.Key_A:
+                    self._cycle_aspect_ratio()
+                    return True
+                if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
+                    self._shortcut_overlay.show_overlay()
                     return True
             return super().eventFilter(obj, event)
 
@@ -461,6 +495,15 @@ class PlayerTab(QWidget):
                 return True
             if key == Qt.Key.Key_F or key == Qt.Key.Key_F11:
                 self._toggle_fullscreen()
+                return True
+            if key == Qt.Key.Key_S:
+                self._take_screenshot()
+                return True
+            if key == Qt.Key.Key_A:
+                self._cycle_aspect_ratio()
+                return True
+            if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
+                self._shortcut_overlay.show_overlay()
                 return True
 
         # 鼠标双击 → 切换全屏（必须在单击之前处理）
@@ -736,6 +779,38 @@ class PlayerTab(QWidget):
         self._update_subtitle_delay_label()
         self._save_subtitle_offset()
 
+    # === 截图 ===
+
+    def _take_screenshot(self):
+        """截取当前视频帧"""
+        if not self.player.current_file:
+            return
+        import time as _time
+        video_path = self.player.current_file
+        video_dir = os.path.dirname(video_path)
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        # 时间码格式：HH-MM-SS
+        pos_ms = self.player.position
+        h = pos_ms // 3600000
+        m = (pos_ms % 3600000) // 60000
+        s = (pos_ms % 60000) // 1000
+        time_tag = f'{h:02d}-{m:02d}-{s:02d}'
+        screenshot_dir = os.path.join(video_dir, 'screenshots')
+        os.makedirs(screenshot_dir, exist_ok=True)
+        save_path = os.path.join(screenshot_dir, f'{video_name}_{time_tag}.png')
+        if self.player.take_screenshot(save_path):
+            from utils.signal_bus import signal_bus
+            signal_bus.show_notification.emit('截图已保存', os.path.basename(save_path))
+
+    # === 宽高比 ===
+
+    def _cycle_aspect_ratio(self):
+        """循环切换宽高比"""
+        label = self.player.cycle_aspect_ratio()
+        self.btn_aspect.setText(label)
+        from utils.signal_bus import signal_bus
+        signal_bus.show_notification.emit('宽高比', label)
+
     def _update_subtitle_delay_label(self):
         """更新字幕延迟标签显示"""
         delay_ms = self.player.get_subtitle_delay()
@@ -967,6 +1042,12 @@ class _FullscreenControlsOverlay(QWidget):
         self._time_current.setText(format_time_ms(pt.player.position))
         self._time_total.setText(format_time_ms(pt.player.duration))
         self._btn_play.setText('⏸' if pt.player.is_playing else '▶')
+        # 同步音量滑块（快捷键/非全屏滑块变化时保持同步）
+        vol = pt.volume_slider.value()
+        if self._volume_slider.value() != vol:
+            self._volume_slider.blockSignals(True)
+            self._volume_slider.setValue(vol)
+            self._volume_slider.blockSignals(False)
 
     def _on_seek_start(self):
         self._is_seeking = True
@@ -991,3 +1072,78 @@ class _FullscreenControlsOverlay(QWidget):
                 self._player_tab.speed_combo.setCurrentIndex(index)
             except ValueError:
                 pass
+
+
+class _ShortcutOverlay(QWidget):
+    """键盘快捷键速查半透明覆盖层，按 ? 或 H 键显示"""
+
+    SHORTCUTS = [
+        ('播放控制', [
+            ('Space', '播放 / 暂停'),
+            ('← / →', '快退 / 快进 10 秒'),
+            ('↑ / ↓', '音量增大 / 减小'),
+            ('N', '下一个视频'),
+            ('P', '上一个视频'),
+            ('S', '截图'),
+            ('A', '切换宽高比'),
+        ]),
+        ('视图', [
+            ('F / F11', '切换全屏'),
+            ('Esc', '退出全屏'),
+            ('? / H', '显示快捷键'),
+        ]),
+    ]
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.hide()
+        self._build_ui()
+
+    def _build_ui(self):
+        from PyQt6.QtGui import QFont
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel('键盘快捷键')
+        title.setObjectName('LargeLabel')
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        for section_name, items in self.SHORTCUTS:
+            section = QLabel(section_name)
+            section.setObjectName('BoldLabel')
+            layout.addWidget(section)
+            for key, desc in items:
+                row = QHBoxLayout()
+                key_label = QLabel(f'  {key}')
+                key_label.setFixedWidth(90)
+                key_label.setObjectName('SecondaryLabel')
+                key_label.setFont(QFont('Consolas', 11))
+                row.addWidget(key_label)
+                desc_label = QLabel(desc)
+                row.addWidget(desc_label)
+                row.addStretch()
+                layout.addLayout(row)
+
+        hint = QLabel('按任意键关闭')
+        hint.setObjectName('SecondaryLabel')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+    def show_overlay(self):
+        parent = self.parent()
+        if parent:
+            self.setGeometry(0, 0, parent.width(), parent.height())
+            self.raise_()
+            self.show()
+            self.setFocus()
+
+    def keyPressEvent(self, event):
+        self.hide()
+        self.parent().video_widget.setFocus()
+
+    def mousePressEvent(self, event):
+        self.hide()
+        self.parent().video_widget.setFocus()

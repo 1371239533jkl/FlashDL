@@ -279,7 +279,7 @@ def _build_stylesheet(theme: str) -> str:
         border-radius: 3px;
         height: 6px;
         text-align: center;
-        font-size: 0px;
+        font-size: 1px;
         color: transparent;
     }}
     QProgressBar::chunk {{
@@ -473,6 +473,12 @@ def _build_stylesheet(theme: str) -> str:
     }}
     #TaskCard:hover {{
         border-color: {t.border_hover};
+    }}
+    #TaskCardCompleted {{
+        background-color: {t.bg_surface};
+        border: 2px solid {t.accent};
+        border-radius: 8px;
+        padding: 14px;
     }}
 
     /* ── 历史卡片 ── */

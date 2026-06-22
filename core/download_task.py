@@ -15,6 +15,9 @@ from core.download_worker import DownloadWorker
 from core.url_validator import validate_url
 from utils.format_utils import ensure_long_path
 from utils.format_utils import format_size, format_speed, format_time
+from utils.logger import get_logger
+
+_log = get_logger('download_task')
 
 
 class DownloadTask(QObject):
@@ -271,6 +274,12 @@ class DownloadTask(QObject):
         self._stop_workers()
         self._workers = []
 
+        # 计算每个 worker 的限速（总限速 / 活跃 worker 数）
+        pending_chunks = [c for c in self.chunks if c['status'] != 'completed']
+        active_count = len(pending_chunks)
+        total_limit = getattr(config, 'DOWNLOAD_SPEED_LIMIT', 0)
+        per_worker_limit = (total_limit // active_count) if (total_limit > 0 and active_count > 0) else 0
+
         for chunk in self.chunks:
             if chunk['status'] == 'completed':
                 continue
@@ -281,7 +290,8 @@ class DownloadTask(QObject):
                 start_byte=chunk['start_byte'],
                 end_byte=chunk['end_byte'],
                 downloaded_bytes=chunk['downloaded_bytes'],
-                headers=self.headers
+                headers=self.headers,
+                speed_limit=per_worker_limit
             )
             worker.chunk_progress.connect(self._on_chunk_progress)
             worker.chunk_completed.connect(self._on_chunk_completed)
@@ -294,7 +304,7 @@ class DownloadTask(QObject):
         for w in self._workers:
             w.stop()
         for w in self._workers:
-            w.wait(3000)
+            w.wait(1000)
 
     def _on_chunk_progress(self, chunk_id: int, new_bytes: int):
         """分块下载进度回调"""
@@ -389,8 +399,8 @@ class DownloadTask(QObject):
             if os.path.exists(final_path):
                 os.remove(final_path)
             os.rename(tmp_path, final_path)
-        except Exception:
-            print(f'[警告] 任务状态保存失败: {self.task_id}', file=sys.stderr)
+        except Exception as e:
+            _log.warning(f'任务状态保存失败: {self.task_id} - {e}')
 
     @classmethod
     def load_from_state(cls, task_dir: str) -> 'DownloadTask':
@@ -402,8 +412,8 @@ class DownloadTask(QObject):
         try:
             with open(state_file, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-        except Exception:
-            print(f'[警告] 任务状态文件无法读取: {state_file}', file=sys.stderr)
+        except Exception as e:
+            _log.warning(f'任务状态文件无法读取: {state_file} - {e}')
             return None
 
         task = cls(
