@@ -616,6 +616,7 @@ class DownloadTab(QWidget):
         signal_bus.task_status_changed.connect(self._on_task_status_changed)
         signal_bus.task_completed.connect(self._on_task_completed)
         signal_bus.task_failed.connect(self._on_task_failed)
+        signal_bus.magnet_metadata_resolved.connect(self._on_magnet_metadata_resolved)
 
     def _add_task(self):
         """添加下载任务（支持批量多行URL，异步准备）"""
@@ -702,6 +703,49 @@ class DownloadTab(QWidget):
                 save_path='', file_size=0,
                 status='failed', created_time=task.created_time
             )
+
+    def _on_magnet_metadata_resolved(self, task_id: str, files_info: list):
+        """磁力链接元数据解析完成，弹出文件选择对话框"""
+        from PyQt6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle('选择文件')
+        dlg.setMinimumWidth(450)
+        dlg_layout = QVBoxLayout(dlg)
+
+        label = QLabel(f'共 {len(files_info)} 个文件，请选择要下载的文件：')
+        dlg_layout.addWidget(label)
+
+        checks = []
+        for fi in files_info:
+            cb = QCheckBox(f'{fi["name"]}  ({format_size(fi["size"])})')
+            cb.setChecked(True)
+            checks.append(cb)
+            dlg_layout.addWidget(cb)
+
+        # 全选/反选按钮
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton('全选')
+        btn_none = QPushButton('反选')
+        btn_all.clicked.connect(lambda: [c.setChecked(True) for c in checks])
+        btn_none.clicked.connect(lambda: [c.setChecked(not c.isChecked()) for c in checks])
+        btn_row.addWidget(btn_all)
+        btn_row.addWidget(btn_none)
+        btn_row.addStretch()
+        dlg_layout.addLayout(btn_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg_layout.addWidget(buttons)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected = [fi['index'] for i, fi in enumerate(files_info) if checks[i].isChecked()]
+            if not selected:
+                return  # 用户未选择任何文件
+            task = self.download_manager.tasks.get(task_id)
+            if task:
+                from core.magnet_download_task import MagnetDownloadTask
+                task.set_file_priorities(selected)
 
 
     def _show_status(self, message: str, is_error: bool = False):

@@ -286,6 +286,25 @@ class MagnetDownloadTask(QObject):
                 if name:
                     self.file_name = name
                 self.total_size = torrent_info.total_size()
+                # 多文件种子：暂停并弹出文件选择对话框
+                num_files = torrent_info.num_files()
+                if num_files > 1:
+                    files_info = []
+                    for i in range(num_files):
+                        fi = torrent_info.files()
+                        files_info.append({
+                            'index': i,
+                            'name': fi.file_path(i),
+                            'size': fi.file_size(i),
+                        })
+                    self._timer.stop()
+                    if self._handle and self._handle.is_valid():
+                        self._handle.pause()
+                    self._set_status(self.PAUSED)
+                    self._save_state()
+                    from utils.signal_bus import signal_bus
+                    signal_bus.magnet_metadata_resolved.emit(self.task_id, files_info)
+                    return
             else:
                 _log.warning(f'磁力元数据无效: {self.task_id}')
         except Exception as e:
@@ -297,6 +316,32 @@ class MagnetDownloadTask(QObject):
         # 通知 UI 更新文件名和大小
         from utils.signal_bus import signal_bus
         signal_bus.task_created.emit(self.task_id, self.get_info())
+
+    def set_file_priorities(self, selected_indices: list):
+        """设置文件优先级：选中文件=1，未选中=0"""
+        if not self._handle or not self._handle.is_valid():
+            return
+        try:
+            ti = self._handle.torrent_file()
+            if not ti:
+                return
+            num_files = ti.num_files()
+            priorities = [1 if i in selected_indices else 0 for i in range(num_files)]
+            self._handle.prioritize_files(priorities)
+            # 更新 total_size 为只选中文件的大小
+            self.total_size = sum(
+                ti.files().file_size(i) for i in range(num_files)
+                if i in selected_indices
+            )
+            self._save_state()
+            # 恢复下载
+            self._handle.resume()
+            self._set_status(self.DOWNLOADING)
+            self._timer.start(config.BT_POLL_INTERVAL)
+            from utils.signal_bus import signal_bus
+            signal_bus.task_created.emit(self.task_id, self.get_info())
+        except Exception as e:
+            _log.error(f'设置文件优先级失败: {self.task_id} - {e}')
 
     def _on_download_completed(self):
         """下载完成处理"""

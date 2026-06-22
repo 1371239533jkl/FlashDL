@@ -292,6 +292,46 @@ class MpvPlayer(QObject):
         except Exception:
             return False
 
+    # ── 视频信息 ──────────────────────────────────────────────
+
+    def get_video_info(self) -> dict:
+        """获取当前视频信息：分辨率、编码、FPS、码率"""
+        try:
+            w = self._mpv.width
+            h = self._mpv.height
+            codec = self._mpv.video_codec or ''
+            fps = self._mpv.container_fps or 0
+            bitrate = self._mpv.video_bitrate or 0
+            return {
+                'resolution': f'{w}x{h}' if w and h else '',
+                'codec': codec,
+                'fps': round(fps, 1) if fps else 0,
+                'bitrate': f'{bitrate / 1000:.0f} kbps' if bitrate else '',
+            }
+        except Exception:
+            return {}
+
+    def get_audio_tracks(self) -> list:
+        """获取音频轨道列表 [{id: int, lang: str, title: str}]"""
+        try:
+            count = self._mpv.track_list_count or 0
+            tracks = []
+            for i in range(count):
+                t = self._mpv.track_list[i] or {}
+                if t.get('type') == 'audio':
+                    tracks.append({
+                        'id': t.get('id', -1),
+                        'lang': t.get('lang', ''),
+                        'title': t.get('title', ''),
+                    })
+            return tracks
+        except Exception:
+            return []
+
+    def set_audio_track(self, track_id: int):
+        """切换音频轨道"""
+        self._mpv.aid = track_id
+
     # ── 清理 ──────────────────────────────────────────────────
 
     def cleanup(self):

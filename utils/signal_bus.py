@@ -13,6 +13,7 @@ class _SignalBus(QObject):
     task_status_changed = pyqtSignal(str, str)       # (task_id, new_status)
     task_completed = pyqtSignal(str, str)            # (task_id, file_path)
     task_failed = pyqtSignal(str, str)               # (task_id, error_message)
+    magnet_metadata_resolved = pyqtSignal(str, list)  # (task_id, files_info)
 
     # 播放器相关信号
     play_video = pyqtSignal(str)                     # (file_path)

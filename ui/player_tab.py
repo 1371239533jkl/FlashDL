@@ -41,6 +41,8 @@ class PlayerTab(QWidget):
         self.video_widget.installEventFilter(self)
         # 快捷键速查覆盖层
         self._shortcut_overlay = _ShortcutOverlay(self)
+        # 视频信息覆盖层
+        self._video_info_overlay = _VideoInfoOverlay(self)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -451,6 +453,9 @@ class PlayerTab(QWidget):
                 if key == Qt.Key.Key_A:
                     self._cycle_aspect_ratio()
                     return True
+                if key == Qt.Key.Key_I:
+                    self._show_video_info()
+                    return True
                 if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
                     self._shortcut_overlay.show_overlay()
                     return True
@@ -501,6 +506,9 @@ class PlayerTab(QWidget):
                 return True
             if key == Qt.Key.Key_A:
                 self._cycle_aspect_ratio()
+                return True
+            if key == Qt.Key.Key_I:
+                self._show_video_info()
                 return True
             if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
                 self._shortcut_overlay.show_overlay()
@@ -701,10 +709,24 @@ class PlayerTab(QWidget):
     # === 字幕（mpv 原生 libass 渲染）===
 
     def _on_subtitle_menu(self):
-        """字幕按钮点击：弹出菜单（添加字幕 + 延迟调节）"""
+        """字幕/音轨按钮点击：弹出菜单（音轨选择 + 字幕延迟）"""
         menu = QMenu(self)
         menu.setStyleSheet('font-size: 12px; padding: 4px;')
 
+        # ── 音轨选择 ──
+        tracks = self.player.get_audio_tracks()
+        if tracks:
+            menu.addAction('音轨').setEnabled(False)
+            for t in tracks:
+                label = f'音轨 {t["id"]}'
+                if t.get('lang'):
+                    label += f' [{t["lang"]}]'
+                if t.get('title'):
+                    label += f' {t["title"]}'
+                menu.addAction(label, lambda tid=t['id']: self.player.set_audio_track(tid))
+            menu.addSeparator()
+
+        # ── 字幕 ──
         delay_ms = self.player.get_subtitle_delay()
         if delay_ms != 0:
             off_text = f'当前偏移: {delay_ms/1000:+.1f}s'
@@ -810,6 +832,12 @@ class PlayerTab(QWidget):
         self.btn_aspect.setText(label)
         from utils.signal_bus import signal_bus
         signal_bus.show_notification.emit('宽高比', label)
+
+    # === 视频信息 ===
+
+    def _show_video_info(self):
+        """显示视频信息覆盖层"""
+        self._video_info_overlay.show_overlay()
 
     def _update_subtitle_delay_label(self):
         """更新字幕延迟标签显示"""
@@ -1074,6 +1102,97 @@ class _FullscreenControlsOverlay(QWidget):
                 pass
 
 
+class _VideoInfoOverlay(QWidget):
+    """视频信息半透明覆盖层，按 I 键或点击按钮显示"""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.hide()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._build_ui()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 160))
+        painter.end()
+
+    def _build_ui(self):
+        from PyQt6.QtGui import QFont
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        title = QLabel('视频信息')
+        title.setObjectName('LargeLabel')
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # 信息行容器
+        self._info_lines = QVBoxLayout()
+        self._info_lines.setSpacing(8)
+        layout.addLayout(self._info_lines)
+
+        layout.addStretch()
+        hint = QLabel('按任意键关闭')
+        hint.setObjectName('SecondaryLabel')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+    def _format_info_line(self, label: str, value) -> str:
+        if value:
+            return f'{label}: {value}'
+        return f'{label}: --'
+
+    def show_overlay(self):
+        parent = self.parent()
+        if parent:
+            self.setFixedWidth(300)
+            self.setGeometry(0, 0, 300, parent.height())
+            self.raise_()
+            self.show()
+            self.setFocus()
+            # 动态构建信息行
+            self._refresh_info()
+
+    def _refresh_info(self):
+        # 清空旧信息行
+        while self._info_lines.count():
+            item = self._info_lines.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        info = self.parent().player.get_video_info()
+        file_path = self.parent().player.current_file
+        if file_path:
+            import os
+            label = QLabel(f'文件: {os.path.basename(file_path)}')
+            label.setObjectName('SecondaryLabel')
+            self._info_lines.addWidget(label)
+
+        for label, key in [('分辨率', 'resolution'), ('编码', 'codec'),
+                           ('FPS', 'fps'), ('码率', 'bitrate')]:
+            val = info.get(key, '')
+            text = self._format_info_line(label, val)
+            lbl = QLabel(text)
+            lbl.setObjectName('SecondaryLabel')
+            self._info_lines.addWidget(lbl)
+
+        tracks = self.parent().player.get_audio_tracks()
+        if tracks:
+            lbl = QLabel(f'音轨数: {len(tracks)}')
+            lbl.setObjectName('SecondaryLabel')
+            self._info_lines.addWidget(lbl)
+
+    def keyPressEvent(self, event):
+        self.hide()
+        self.parent().video_widget.setFocus()
+
+    def mousePressEvent(self, event):
+        self.hide()
+        self.parent().video_widget.setFocus()
+
+
 class _ShortcutOverlay(QWidget):
     """键盘快捷键速查半透明覆盖层，按 ? 或 H 键显示"""
 
@@ -1086,6 +1205,7 @@ class _ShortcutOverlay(QWidget):
             ('P', '上一个视频'),
             ('S', '截图'),
             ('A', '切换宽高比'),
+            ('I', '视频信息'),
         ]),
         ('视图', [
             ('F / F11', '切换全屏'),
@@ -1097,14 +1217,20 @@ class _ShortcutOverlay(QWidget):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.hide()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._build_ui()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 160))
+        painter.end()
 
     def _build_ui(self):
         from PyQt6.QtGui import QFont
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title = QLabel('键盘快捷键')
         title.setObjectName('LargeLabel')
@@ -1135,7 +1261,8 @@ class _ShortcutOverlay(QWidget):
     def show_overlay(self):
         parent = self.parent()
         if parent:
-            self.setGeometry(0, 0, parent.width(), parent.height())
+            self.setFixedWidth(340)
+            self.setGeometry(0, 0, 340, parent.height())
             self.raise_()
             self.show()
             self.setFocus()
