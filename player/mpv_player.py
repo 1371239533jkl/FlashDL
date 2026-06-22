@@ -332,6 +332,145 @@ class MpvPlayer(QObject):
         """切换音频轨道"""
         self._mpv.aid = track_id
 
+    # ── 视频轨道 ──────────────────────────────────────────────
+
+    def get_video_tracks(self) -> list:
+        """获取视频轨道列表 [{id, lang, title, w, h, codec}]"""
+        try:
+            count = self._mpv.track_list_count or 0
+            tracks = []
+            for i in range(count):
+                t = self._mpv.track_list[i] or {}
+                if t.get('type') == 'video':
+                    tracks.append({
+                        'id': t.get('id', -1),
+                        'lang': t.get('lang', ''),
+                        'title': t.get('title', ''),
+                        'w': t.get('demux-w', 0),
+                        'h': t.get('demux-h', 0),
+                        'codec': t.get('codec', ''),
+                    })
+            return tracks
+        except Exception:
+            return []
+
+    def set_video_track(self, track_id: int):
+        """切换视频轨道"""
+        self._mpv.vid = track_id
+
+    # ── 内嵌字幕轨道 ──────────────────────────────────────────
+
+    def get_subtitle_tracks(self) -> list:
+        """获取内嵌字幕轨道列表 [{id, lang, title, selected}]"""
+        try:
+            count = self._mpv.track_list_count or 0
+            tracks = []
+            try:
+                current_sid = self._mpv.sid
+                if current_sid is False or current_sid is None:
+                    current_sid = -1
+            except Exception:
+                current_sid = -1
+            for i in range(count):
+                t = self._mpv.track_list[i] or {}
+                if t.get('type') == 'sub':
+                    tracks.append({
+                        'id': t.get('id', -1),
+                        'lang': t.get('lang', ''),
+                        'title': t.get('title', ''),
+                        'selected': t.get('id') == current_sid,
+                    })
+            return tracks
+        except Exception:
+            return []
+
+    def set_subtitle_track(self, track_id: int):
+        """切换内嵌字幕轨道"""
+        self._mpv.sid = track_id
+
+    # ── 章节导航 ──────────────────────────────────────────────
+
+    def get_chapters(self) -> list:
+        """获取章节列表 [{index, title, time_ms}]"""
+        try:
+            count = self._mpv.chapter_list_count or 0
+            chapters = []
+            for i in range(count):
+                ch = self._mpv.chapter_list[i] or {}
+                chapters.append({
+                    'index': i,
+                    'title': ch.get('title', f'章节 {i + 1}'),
+                    'time_ms': int(ch.get('time', 0) * 1000),
+                })
+            return chapters
+        except Exception:
+            return []
+
+    @property
+    def chapter(self) -> int:
+        """当前章节索引，无章节返回 -1"""
+        try:
+            return self._mpv.chapter
+        except Exception:
+            return -1
+
+    def seek_to_chapter(self, index: int):
+        """跳转到指定章节"""
+        self._mpv.command('set', 'chapter', index)
+
+    # ── 画面调整：亮度 / 对比度 / 饱和度 / 伽马 ──────────────
+
+    _VIDEO_EQUALIZER_KEYS = ['brightness', 'contrast', 'saturation', 'gamma']
+
+    def _get_video_param(self, key: str) -> int:
+        """读取视频参数值（范围 -100 ~ 100）"""
+        try:
+            return int(getattr(self._mpv, key, 0))
+        except Exception:
+            return 0
+
+    def _set_video_param(self, key: str, value: int):
+        """设置视频参数值（自动钳位到 -100 ~ 100）"""
+        value = max(-100, min(100, value))
+        setattr(self._mpv, key, value)
+
+    @property
+    def brightness(self) -> int:
+        return self._get_video_param('brightness')
+
+    @brightness.setter
+    def brightness(self, value: int):
+        self._set_video_param('brightness', value)
+
+    @property
+    def contrast(self) -> int:
+        return self._get_video_param('contrast')
+
+    @contrast.setter
+    def contrast(self, value: int):
+        self._set_video_param('contrast', value)
+
+    @property
+    def saturation(self) -> int:
+        return self._get_video_param('saturation')
+
+    @saturation.setter
+    def saturation(self, value: int):
+        self._set_video_param('saturation', value)
+
+    @property
+    def gamma(self) -> int:
+        return self._get_video_param('gamma')
+
+    @gamma.setter
+    def gamma(self, value: int):
+        self._set_video_param('gamma', value)
+
+    def reset_video_params(self):
+        """重置所有画面参数"""
+        for key in self._VIDEO_EQUALIZER_KEYS:
+            setattr(self._mpv, key, 0)
+
     # ── 清理 ──────────────────────────────────────────────────
 
     def cleanup(self):

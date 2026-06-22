@@ -536,4 +536,20 @@ def _build_stylesheet(theme: str) -> str:
         background-color: #000000;
         border-radius: 6px;
     }}
+
+    /* ── 播放器信息覆盖层（半透明毛玻璃） ── */
+    #VideoInfoOverlay {{
+        background: transparent;
+    }}
+    #VideoInfoOverlay QLabel {{
+        background: transparent;
+        color: #FFFFFF;
+    }}
+    #ShortcutOverlay {{
+        background: transparent;
+    }}
+    #ShortcutOverlay QLabel {{
+        background: transparent;
+        color: #FFFFFF;
+    }}
     """

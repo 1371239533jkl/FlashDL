@@ -3,10 +3,11 @@
 
 import os
 from PyQt6.QtCore import Qt, QTimer, QEvent, QPoint
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QComboBox, QFileDialog, QListWidget, QListWidgetItem,
-    QSplitter, QFrame, QMenu
+    QSplitter, QFrame, QMenu, QWidgetAction
 )
 import config
 from player.mpv_player import MpvPlayer
@@ -222,6 +223,20 @@ class PlayerTab(QWidget):
         self.btn_aspect.setToolTip('宽高比 (A)')
         self.btn_aspect.clicked.connect(self._cycle_aspect_ratio)
         btn_row.addWidget(self.btn_aspect)
+
+        # 视频菜单按钮（视频轨道 + 画面调整）
+        self.btn_video = QPushButton('视频')
+        self.btn_video.setFixedWidth(56)
+        self.btn_video.setToolTip('视频轨道 / 画面调整')
+        self.btn_video.clicked.connect(self._on_video_menu)
+        btn_row.addWidget(self.btn_video)
+
+        # 章节按钮
+        self.btn_chapter = QPushButton('章节')
+        self.btn_chapter.setFixedWidth(56)
+        self.btn_chapter.setToolTip('章节导航')
+        self.btn_chapter.clicked.connect(self._on_chapter_menu)
+        btn_row.addWidget(self.btn_chapter)
 
         # 全屏（画出来的图标按钮）
         btn_fullscreen = QPushButton()
@@ -457,7 +472,7 @@ class PlayerTab(QWidget):
                     self._show_video_info()
                     return True
                 if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
-                    self._shortcut_overlay.show_overlay()
+                    self._toggle_shortcut_overlay()
                     return True
             return super().eventFilter(obj, event)
 
@@ -511,7 +526,7 @@ class PlayerTab(QWidget):
                 self._show_video_info()
                 return True
             if key == Qt.Key.Key_H or key == Qt.Key.Key_Question:
-                self._shortcut_overlay.show_overlay()
+                self._toggle_shortcut_overlay()
                 return True
 
         # 鼠标双击 → 切换全屏（必须在单击之前处理）
@@ -709,14 +724,48 @@ class PlayerTab(QWidget):
     # === 字幕（mpv 原生 libass 渲染）===
 
     def _on_subtitle_menu(self):
-        """字幕/音轨按钮点击：弹出菜单（音轨选择 + 字幕延迟）"""
+        """字幕按钮菜单（内嵌字幕轨 + 外挂字幕 + 音轨 + 延迟）"""
         menu = QMenu(self)
         menu.setStyleSheet('font-size: 12px; padding: 4px;')
 
-        # ── 音轨选择 ──
+        has_any = False
+
+        # ── 内嵌字幕轨道 ──
+        sub_tracks = self.player.get_subtitle_tracks()
+        if sub_tracks:
+            has_any = True
+            menu.addAction('内嵌字幕').setEnabled(False)
+            for t in sub_tracks:
+                label = f'字幕 {t["id"]}'
+                if t.get('lang'):
+                    label += f' [{t["lang"]}]'
+                if t.get('title'):
+                    label += f' {t["title"]}'
+                if t.get('selected'):
+                    label = f'✓ {label}'
+                menu.addAction(label, lambda tid=t['id']: self.player.set_subtitle_track(tid))
+
+        # ── 同目录外挂字幕 ──
+        external_subs = self._scan_external_subtitles()
+        if external_subs:
+            if has_any:
+                menu.addSeparator()
+            has_any = True
+            menu.addAction('外挂字幕').setEnabled(False)
+            for name, path in external_subs:
+                menu.addAction(name, lambda p=path: self._load_subtitle(p))
+
+        if has_any:
+            menu.addSeparator()
+
+        # ── 手动添加字幕 ──
+        menu.addAction('添加字幕文件...', self._open_subtitle_dialog)
+
+        # ── 音轨切换 ──
         tracks = self.player.get_audio_tracks()
         if tracks:
-            menu.addAction('音轨').setEnabled(False)
+            menu.addSeparator()
+            menu.addAction('切换音轨').setEnabled(False)
             for t in tracks:
                 label = f'音轨 {t["id"]}'
                 if t.get('lang'):
@@ -724,29 +773,154 @@ class PlayerTab(QWidget):
                 if t.get('title'):
                     label += f' {t["title"]}'
                 menu.addAction(label, lambda tid=t['id']: self.player.set_audio_track(tid))
-            menu.addSeparator()
 
-        # ── 字幕 ──
+        # ── 字幕延迟 ──
         delay_ms = self.player.get_subtitle_delay()
+        menu.addSeparator()
         if delay_ms != 0:
-            off_text = f'当前偏移: {delay_ms/1000:+.1f}s'
+            off_text = f'字幕延迟: {delay_ms/1000:+.1f}s'
         else:
-            off_text = '已同步'
+            off_text = '字幕延迟: 已同步'
         menu.addAction(off_text).setEnabled(False)
-
-        menu.addSeparator()
-        menu.addAction('[添加字幕文件]', self._open_subtitle_dialog)
-        menu.addSeparator()
-
-        menu.addAction('[提前 0.5s]', lambda: self._adjust_subtitle_offset(-500))
-        menu.addAction('[延后 0.5s]', lambda: self._adjust_subtitle_offset(500))
-
+        menu.addAction('提前 0.5s', lambda: self._adjust_subtitle_offset(-500))
+        menu.addAction('延后 0.5s', lambda: self._adjust_subtitle_offset(500))
         if delay_ms != 0:
-            menu.addSeparator()
-            menu.addAction('[重置同步]', lambda: self._adjust_subtitle_offset(-delay_ms))
+            menu.addAction('重置同步', lambda: self._adjust_subtitle_offset(-delay_ms))
 
         btn_pos = self.btn_subtitle.mapToGlobal(self.btn_subtitle.rect().bottomLeft())
         menu.exec(btn_pos - QPoint(0, menu.sizeHint().height() + self.btn_subtitle.height()))
+
+    def _scan_external_subtitles(self) -> list:
+        """扫描同目录下所有外挂字幕文件，返回 [(显示名, 路径)]"""
+        video_path = self.player.current_file
+        if not video_path:
+            return []
+        video_dir = os.path.dirname(video_path)
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        results = []
+        try:
+            for fname in sorted(os.listdir(video_dir)):
+                ext = os.path.splitext(fname)[1].lower()
+                if ext not in config.SUBTITLE_EXTENSIONS:
+                    continue
+                full_path = os.path.join(video_dir, fname)
+                if not os.path.isfile(full_path):
+                    continue
+                # 优先显示与视频同名的，其次显示其他
+                base = os.path.splitext(fname)[0]
+                if base == video_name or base.startswith(video_name):
+                    results.append((f'★ {fname}', full_path))
+                else:
+                    results.append((fname, full_path))
+        except Exception:
+            pass
+        return results
+
+    def _on_video_menu(self):
+        """视频菜单（视频轨道 + 亮度/对比度/饱和度/伽马）"""
+        menu = QMenu(self)
+        menu.setStyleSheet('font-size: 12px; padding: 4px;')
+
+        # ── 视频轨道 ──
+        v_tracks = self.player.get_video_tracks()
+        if v_tracks:
+            menu.addAction('视频轨道').setEnabled(False)
+            for t in v_tracks:
+                label = f'视频 {t["id"]}'
+                if t.get('lang'):
+                    label += f' [{t["lang"]}]'
+                if t.get('title'):
+                    label += f' {t["title"]}'
+                if t.get('w') and t.get('h'):
+                    label += f' ({t["w"]}x{t["h"]})'
+                menu.addAction(label, lambda tid=t['id']: self.player.set_video_track(tid))
+            menu.addSeparator()
+
+        # ── 画面调整 ──
+        menu.addAction('画面调整').setEnabled(False)
+
+        # 亮度
+        eq_menu = self._make_slider_action(
+            menu, '亮度', self.player.brightness,
+            lambda v: setattr(self.player, 'brightness', v))
+        # 对比度
+        self._make_slider_action(
+            menu, '对比度', self.player.contrast,
+            lambda v: setattr(self.player, 'contrast', v))
+        # 饱和度
+        self._make_slider_action(
+            menu, '饱和度', self.player.saturation,
+            lambda v: setattr(self.player, 'saturation', v))
+        # 伽马
+        self._make_slider_action(
+            menu, '伽马', self.player.gamma,
+            lambda v: setattr(self.player, 'gamma', v))
+
+        menu.addSeparator()
+        menu.addAction('重置全部', self.player.reset_video_params)
+
+        btn_pos = self.btn_video.mapToGlobal(self.btn_video.rect().bottomLeft())
+        menu.exec(btn_pos - QPoint(0, menu.sizeHint().height() + self.btn_video.height()))
+
+    def _make_slider_action(self, menu: QMenu, name: str, current: int,
+                            on_change) -> None:
+        """在菜单中嵌入滑块控件"""
+        action = QAction(name, menu)
+        action.setEnabled(False)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(-100, 100)
+        slider.setValue(current)
+        slider.setFixedWidth(160)
+        slider.setToolTip(f'{name}: {current:+d}')
+
+        def _on_value(v):
+            slider.setToolTip(f'{name}: {v:+d}')
+            on_change(v)
+        slider.valueChanged.connect(_on_value)
+
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(16, 2, 8, 2)
+        layout.setSpacing(8)
+        lbl = QLabel(f'{name}')
+        lbl.setFixedWidth(46)
+        lbl.setObjectName('SecondaryLabel')
+        layout.addWidget(lbl)
+
+        val_label = QLabel(f'{current:+d}')
+        val_label.setFixedWidth(36)
+        val_label.setObjectName('SecondaryLabel')
+        slider.valueChanged.connect(lambda v, ll=val_label, nm=name:
+                                    ll.setText(f'{v:+d}'))
+        layout.addWidget(slider)
+        layout.addWidget(val_label)
+
+        widget_action = QWidgetAction(menu)
+        widget_action.setDefaultWidget(widget)
+        menu.addAction(widget_action)
+
+    def _on_chapter_menu(self):
+        """章节导航菜单"""
+        menu = QMenu(self)
+        menu.setStyleSheet('font-size: 12px; padding: 4px;')
+
+        chapters = self.player.get_chapters()
+        current_idx = self.player.chapter
+
+        if not chapters:
+            menu.addAction('无章节信息').setEnabled(False)
+        else:
+            from utils.format_utils import format_time_ms
+            for ch in chapters:
+                label = f'{format_time_ms(ch["time_ms"])}  {ch["title"]}'
+                if ch['index'] == current_idx:
+                    label = f'▶ {label}'
+                menu.addAction(label, lambda idx=ch['index']:
+                               self.player.seek_to_chapter(idx))
+
+        btn_pos = self.btn_chapter.mapToGlobal(self.btn_chapter.rect().bottomLeft())
+        menu.exec(btn_pos - QPoint(0, menu.sizeHint().height() + self.btn_chapter.height()))
 
     def _open_subtitle_dialog(self):
         """手动选择字幕文件"""
@@ -836,8 +1010,20 @@ class PlayerTab(QWidget):
     # === 视频信息 ===
 
     def _show_video_info(self):
-        """显示视频信息覆盖层"""
-        self._video_info_overlay.show_overlay()
+        """切换视频信息覆盖层"""
+        ov = self._video_info_overlay
+        if ov.isVisible():
+            ov._close()
+        else:
+            ov.show_overlay()
+
+    def _toggle_shortcut_overlay(self):
+        """切换快捷键覆盖层"""
+        ov = self._shortcut_overlay
+        if ov.isVisible():
+            ov._close()
+        else:
+            ov.show_overlay()
 
     def _update_subtitle_delay_label(self):
         """更新字幕延迟标签显示"""
@@ -1103,41 +1289,75 @@ class _FullscreenControlsOverlay(QWidget):
 
 
 class _VideoInfoOverlay(QWidget):
-    """视频信息半透明覆盖层，按 I 键或点击按钮显示"""
+    """视频信息半透明覆盖层（独立 Tool 窗口，悬浮在 mpv 视频之上），按 I 键显示"""
 
-    def __init__(self, parent: QWidget):
-        super().__init__(parent)
-        self.hide()
+    def __init__(self, player_tab: 'PlayerTab'):
+        super().__init__(None)
+        self._player_tab = player_tab
+        self.setObjectName('VideoInfoOverlay')
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # 跟随窗口位置同步
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(80)
+        self._sync_timer.timeout.connect(self._sync_position)
+        # 实时刷新视频信息
+        self._info_timer = QTimer(self)
+        self._info_timer.setInterval(500)
+        self._info_timer.timeout.connect(self._refresh_info)
         self._build_ui()
+        self.hide()
 
     def paintEvent(self, event):
-        from PyQt6.QtGui import QPainter, QColor
+        from PyQt6.QtGui import QPainter, QColor, QPainterPath
+        from PyQt6.QtCore import QRectF
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 160))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        # 半透明：视频内容可透出
+        painter.setBrush(QColor(18, 18, 40, 160))
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(4, 4, -4, -4), 12, 12)
+        painter.drawPath(path)
         painter.end()
 
+    def _sync_position(self):
+        """跟随主窗口移动/缩放"""
+        vr = self._player_tab.video_widget
+        if not vr.isVisible():
+            self.hide()
+            return
+        top_left = vr.mapToGlobal(vr.rect().topLeft())
+        self.setGeometry(top_left.x(), top_left.y(),
+                         min(300, vr.width()), vr.height())
+
     def _build_ui(self):
-        from PyQt6.QtGui import QFont
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
 
         title = QLabel('视频信息')
-        title.setObjectName('LargeLabel')
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet('color: #FFFFFF; font-size: 18px; font-weight: 700; background: transparent;')
         layout.addWidget(title)
 
-        # 信息行容器
         self._info_lines = QVBoxLayout()
         self._info_lines.setSpacing(8)
         layout.addLayout(self._info_lines)
 
         layout.addStretch()
         hint = QLabel('按任意键关闭')
-        hint.setObjectName('SecondaryLabel')
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet('color: rgba(255,255,255,140); font-size: 12px; background: transparent;')
         layout.addWidget(hint)
+
+    def _label_style(self) -> str:
+        return 'color: rgba(255,255,255,200); font-size: 13px; background: transparent;'
 
     def _format_info_line(self, label: str, value) -> str:
         if value:
@@ -1145,29 +1365,35 @@ class _VideoInfoOverlay(QWidget):
         return f'{label}: --'
 
     def show_overlay(self):
-        parent = self.parent()
-        if parent:
-            self.setFixedWidth(300)
-            self.setGeometry(0, 0, 300, parent.height())
-            self.raise_()
-            self.show()
-            self.setFocus()
-            # 动态构建信息行
-            self._refresh_info()
+        self._sync_position()
+        self.show()
+        self.setFocus()
+        self._sync_timer.start()
+        self._last_snapshot = None
+        self._info_timer.start()
+        self._refresh_info()
 
     def _refresh_info(self):
-        # 清空旧信息行
+        info = self._player_tab.player.get_video_info()
+        file_path = self._player_tab.player.current_file or ''
+        # 用位置和当前文件做快照，无变化时跳过重建避免闪烁
+        position = self._player_tab.player.position
+        snapshot = (file_path, position,
+                    info.get('resolution', ''), info.get('codec', ''),
+                    info.get('fps', ''), info.get('bitrate', ''))
+        if snapshot == getattr(self, '_last_snapshot', None):
+            return
+        self._last_snapshot = snapshot
+
         while self._info_lines.count():
             item = self._info_lines.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        info = self.parent().player.get_video_info()
-        file_path = self.parent().player.current_file
         if file_path:
             import os
             label = QLabel(f'文件: {os.path.basename(file_path)}')
-            label.setObjectName('SecondaryLabel')
+            label.setStyleSheet(self._label_style())
             self._info_lines.addWidget(label)
 
         for label, key in [('分辨率', 'resolution'), ('编码', 'codec'),
@@ -1175,26 +1401,30 @@ class _VideoInfoOverlay(QWidget):
             val = info.get(key, '')
             text = self._format_info_line(label, val)
             lbl = QLabel(text)
-            lbl.setObjectName('SecondaryLabel')
+            lbl.setStyleSheet(self._label_style())
             self._info_lines.addWidget(lbl)
 
-        tracks = self.parent().player.get_audio_tracks()
+        tracks = self._player_tab.player.get_audio_tracks()
         if tracks:
             lbl = QLabel(f'音轨数: {len(tracks)}')
-            lbl.setObjectName('SecondaryLabel')
+            lbl.setStyleSheet(self._label_style())
             self._info_lines.addWidget(lbl)
 
-    def keyPressEvent(self, event):
+    def _close(self):
+        self._sync_timer.stop()
+        self._info_timer.stop()
         self.hide()
-        self.parent().video_widget.setFocus()
+        self._player_tab.video_widget.setFocus()
+
+    def keyPressEvent(self, event):
+        self._close()
 
     def mousePressEvent(self, event):
-        self.hide()
-        self.parent().video_widget.setFocus()
+        self._close()
 
 
 class _ShortcutOverlay(QWidget):
-    """键盘快捷键速查半透明覆盖层，按 ? 或 H 键显示"""
+    """键盘快捷键速查半透明覆盖层（独立 Tool 窗口，悬浮在 mpv 视频之上），按 ? 或 H 键显示"""
 
     SHORTCUTS = [
         ('播放控制', [
@@ -1214,63 +1444,97 @@ class _ShortcutOverlay(QWidget):
         ]),
     ]
 
-    def __init__(self, parent: QWidget):
-        super().__init__(parent)
-        self.hide()
+    def __init__(self, player_tab: 'PlayerTab'):
+        super().__init__(None)
+        self._player_tab = player_tab
+        self.setObjectName('ShortcutOverlay')
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # 跟随窗口位置同步
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(80)
+        self._sync_timer.timeout.connect(self._sync_position)
         self._build_ui()
+        self.hide()
 
     def paintEvent(self, event):
-        from PyQt6.QtGui import QPainter, QColor
+        from PyQt6.QtGui import QPainter, QColor, QPainterPath
+        from PyQt6.QtCore import QRectF
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 160))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        # 半透明：视频内容可透出
+        painter.setBrush(QColor(18, 18, 40, 160))
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(4, 4, -4, -4), 12, 12)
+        painter.drawPath(path)
         painter.end()
+
+    def _sync_position(self):
+        """跟随主窗口移动/缩放"""
+        vr = self._player_tab.video_widget
+        if not vr.isVisible():
+            self.hide()
+            return
+        top_left = vr.mapToGlobal(vr.rect().topLeft())
+        self.setGeometry(top_left.x(), top_left.y(),
+                         min(340, vr.width()), vr.height())
 
     def _build_ui(self):
         from PyQt6.QtGui import QFont
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         title = QLabel('键盘快捷键')
-        title.setObjectName('LargeLabel')
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet('color: #FFFFFF; font-size: 18px; font-weight: 700; background: transparent;')
         layout.addWidget(title)
+
+        section_style = 'color: #FFFFFF; font-size: 14px; font-weight: bold; background: transparent;'
+        key_style = 'color: rgba(255,255,255,180); font-size: 12px; background: transparent;'
+        desc_style = 'color: rgba(255,255,255,220); font-size: 13px; background: transparent;'
 
         for section_name, items in self.SHORTCUTS:
             section = QLabel(section_name)
-            section.setObjectName('BoldLabel')
+            section.setStyleSheet(section_style)
             layout.addWidget(section)
             for key, desc in items:
                 row = QHBoxLayout()
                 key_label = QLabel(f'  {key}')
                 key_label.setFixedWidth(90)
-                key_label.setObjectName('SecondaryLabel')
+                key_label.setStyleSheet(key_style)
                 key_label.setFont(QFont('Consolas', 11))
                 row.addWidget(key_label)
                 desc_label = QLabel(desc)
+                desc_label.setStyleSheet(desc_style)
                 row.addWidget(desc_label)
                 row.addStretch()
                 layout.addLayout(row)
 
         hint = QLabel('按任意键关闭')
-        hint.setObjectName('SecondaryLabel')
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet('color: rgba(255,255,255,100); font-size: 12px; background: transparent;')
         layout.addWidget(hint)
 
     def show_overlay(self):
-        parent = self.parent()
-        if parent:
-            self.setFixedWidth(340)
-            self.setGeometry(0, 0, 340, parent.height())
-            self.raise_()
-            self.show()
-            self.setFocus()
+        self._sync_position()
+        self.show()
+        self.setFocus()
+        self._sync_timer.start()
+
+    def _close(self):
+        self._sync_timer.stop()
+        self.hide()
+        self._player_tab.video_widget.setFocus()
 
     def keyPressEvent(self, event):
-        self.hide()
-        self.parent().video_widget.setFocus()
+        self._close()
 
     def mousePressEvent(self, event):
-        self.hide()
-        self.parent().video_widget.setFocus()
+        self._close()
