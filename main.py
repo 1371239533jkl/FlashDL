@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def main():
     # 高DPI支持
     os.environ['QT_ENABLE_HIGHDPI_SCALING'] = '1'
+    # 剪贴板重试超时，避免反复重试刷屏
+    os.environ['QT_QPA_CLIPBOARD_TIMEOUT'] = '500'
 
     # 重要：libtorrent session 必须在 PyQt6 导入之前初始化
     # 否则 PyQt6 和 libtorrent 的原生库会冲突导致段错误 (Windows)

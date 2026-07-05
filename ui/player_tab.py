@@ -51,6 +51,8 @@ class PlayerTab(QWidget):
         layout.setSpacing(0)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(1)
+
 
         # 左侧: 视频区域 + 控制条
         left_panel = QWidget()
@@ -85,9 +87,9 @@ class PlayerTab(QWidget):
         self._splitter = splitter
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([750, 250])
+        splitter.setSizes([920, 240])
 
         layout.addWidget(splitter)
 
@@ -96,14 +98,15 @@ class PlayerTab(QWidget):
         controls = QFrame()
         controls.setObjectName('PlayerControls')
         controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(12, 6, 12, 8)
-        controls_layout.setSpacing(6)
+        controls_layout.setContentsMargins(20, 10, 20, 14)
+        controls_layout.setSpacing(10)
 
         # ======== 第一行：进度条 + 时间 ========
         seek_row = QHBoxLayout()
+        seek_row.setSpacing(8)
         self.time_current = QLabel('00:00')
-        self.time_current.setObjectName('SecondaryLabel')
-        self.time_current.setFixedWidth(50)
+        self.time_current.setObjectName('MonoLabel')
+        self.time_current.setFixedWidth(40)
         seek_row.addWidget(self.time_current)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
@@ -114,8 +117,8 @@ class PlayerTab(QWidget):
         seek_row.addWidget(self.seek_slider)
 
         self.time_total = QLabel('00:00')
-        self.time_total.setObjectName('SecondaryLabel')
-        self.time_total.setFixedWidth(50)
+        self.time_total.setObjectName('MonoLabel')
+        self.time_total.setFixedWidth(40)
         self.time_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         seek_row.addWidget(self.time_total)
         controls_layout.addLayout(seek_row)
@@ -140,9 +143,9 @@ class PlayerTab(QWidget):
         btn_row.addWidget(btn_backward)
 
         self.btn_play = QPushButton('▶')
-        self.btn_play.setFixedSize(46, 38)
-        self.btn_play.setObjectName('PrimaryBtn')
-        self.btn_play.setStyleSheet('font-size: 16px; padding: 2px;')
+        self.btn_play.setFixedSize(36, 36)
+        self.btn_play.setObjectName('PlayPauseBtn')
+        self.btn_play.setStyleSheet('font-size: 14px;')
         self.btn_play.clicked.connect(self._toggle_play)
         btn_row.addWidget(self.btn_play)
 
@@ -183,10 +186,11 @@ class PlayerTab(QWidget):
 
         # 倍速（显示 1.0x）
         self.speed_combo = QComboBox()
+        self.speed_combo.setObjectName('SpeedBadge')
         for rate in config.PLAYBACK_RATES:
             self.speed_combo.addItem(f'{rate}x', rate)
         self.speed_combo.setCurrentText('1.0x')
-        self.speed_combo.setFixedWidth(66)
+        self.speed_combo.setFixedWidth(60)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
         btn_row.addWidget(self.speed_combo)
 
@@ -194,23 +198,24 @@ class PlayerTab(QWidget):
 
         # 字幕（点击弹出菜单）
         self.btn_subtitle = QPushButton('字幕')
-        self.btn_subtitle.setFixedWidth(56)
+        self.btn_subtitle.setFixedSize(40, 26)
+        self.btn_subtitle.setObjectName('PlayerCtrlBtn')
         self.btn_subtitle.setToolTip('加载字幕文件')
         self.btn_subtitle.clicked.connect(self._on_subtitle_menu)
         btn_row.addWidget(self.btn_subtitle)
 
-        # 字幕偏移状态（小标签，旁边显示）
+        # 字幕偏移状态
         self.sub_delay_label = QLabel()
-        self.sub_delay_label.setObjectName('SecondaryLabel')
-        self.sub_delay_label.setFixedWidth(42)
+        self.sub_delay_label.setObjectName('MonoLabel')
+        self.sub_delay_label.setFixedWidth(36)
         self.sub_delay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         btn_row.addWidget(self.sub_delay_label)
 
-        btn_row.addSpacing(4)
+        btn_row.addSpacing(6)
 
         # 截图按钮
         btn_screenshot = QPushButton('📷')
-        btn_screenshot.setFixedSize(38, 34)
+        btn_screenshot.setFixedSize(30, 30)
         btn_screenshot.setObjectName('PlayerCtrlBtn')
         btn_screenshot.setToolTip('截图 (S)')
         btn_screenshot.clicked.connect(self._take_screenshot)
@@ -218,22 +223,24 @@ class PlayerTab(QWidget):
 
         # 宽高比按钮
         self.btn_aspect = QPushButton('原始')
-        self.btn_aspect.setFixedWidth(50)
+        self.btn_aspect.setFixedSize(40, 26)
         self.btn_aspect.setObjectName('PlayerCtrlBtn')
         self.btn_aspect.setToolTip('宽高比 (A)')
         self.btn_aspect.clicked.connect(self._cycle_aspect_ratio)
         btn_row.addWidget(self.btn_aspect)
 
-        # 视频菜单按钮（视频轨道 + 画面调整）
+        # 视频菜单按钮
         self.btn_video = QPushButton('视频')
-        self.btn_video.setFixedWidth(56)
+        self.btn_video.setFixedSize(40, 26)
+        self.btn_video.setObjectName('PlayerCtrlBtn')
         self.btn_video.setToolTip('视频轨道 / 画面调整')
         self.btn_video.clicked.connect(self._on_video_menu)
         btn_row.addWidget(self.btn_video)
 
         # 章节按钮
         self.btn_chapter = QPushButton('章节')
-        self.btn_chapter.setFixedWidth(56)
+        self.btn_chapter.setFixedSize(40, 26)
+        self.btn_chapter.setObjectName('PlayerCtrlBtn')
         self.btn_chapter.setToolTip('章节导航')
         self.btn_chapter.clicked.connect(self._on_chapter_menu)
         btn_row.addWidget(self.btn_chapter)
@@ -253,16 +260,21 @@ class PlayerTab(QWidget):
     def _create_playlist_panel(self) -> QWidget:
         """创建播放列表面板"""
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        panel.setObjectName('PlaylistPanel')
 
-        header = QHBoxLayout()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 头部
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(14, 12, 14, 12)
         label = QLabel('播放列表')
         label.setObjectName('PlaylistHeader')
-        header.addWidget(label)
-        header.addStretch()
-        layout.addLayout(header)
+        header_layout.addWidget(label)
+        header_layout.addStretch()
+        layout.addWidget(header)
 
         self.playlist_widget = QListWidget()
         self.playlist_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
@@ -271,18 +283,25 @@ class PlayerTab(QWidget):
         self.playlist_widget.itemDoubleClicked.connect(self._on_playlist_item_clicked)
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self._on_playlist_context_menu)
-        # 拖拽排序后同步 PlaylistManager
         self.playlist_widget.model().layoutChanged.connect(self._on_playlist_reordered)
-        layout.addWidget(self.playlist_widget)
+        layout.addWidget(self.playlist_widget, 1)
 
-        btn_row = QHBoxLayout()
-        btn_add = QPushButton('添加文件')
+        # 底部按钮
+        btn_row = QWidget()
+        btn_row_layout = QHBoxLayout(btn_row)
+        btn_row_layout.setContentsMargins(12, 8, 12, 10)
+        btn_row_layout.setSpacing(6)
+
+        btn_add = QPushButton('+ 添加')
+        btn_add.setObjectName('SmallBtn')
         btn_add.clicked.connect(self._add_files_to_playlist)
-        btn_row.addWidget(btn_add)
-        btn_clear = QPushButton('清空列表')
+        btn_row_layout.addWidget(btn_add)
+
+        btn_clear = QPushButton('清空')
+        btn_clear.setObjectName('SmallBtn')
         btn_clear.clicked.connect(self._clear_playlist)
-        btn_row.addWidget(btn_clear)
-        layout.addLayout(btn_row)
+        btn_row_layout.addWidget(btn_clear)
+        layout.addWidget(btn_row)
 
         return panel
 

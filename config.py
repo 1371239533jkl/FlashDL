@@ -32,11 +32,13 @@ TEMP_DIR = str(Path(__file__).parent / "temp" / "downloads")
 DB_PATH = str(Path(__file__).parent / "data" / "history.db")
 
 # UI配置
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 700
-MIN_WINDOW_WIDTH = 800
+WINDOW_WIDTH = 1160
+WINDOW_HEIGHT = 740
+MIN_WINDOW_WIDTH = 900
 MIN_WINDOW_HEIGHT = 600
-TITLE_BAR_HEIGHT = 38
+TITLE_BAR_HEIGHT = 44
+SIDEBAR_WIDTH = 48
+TAB_BAR_HEIGHT = 36
 UI_UPDATE_INTERVAL = 33           # UI刷新间隔(毫秒, ~30fps)
 
 # 支持的视频格式

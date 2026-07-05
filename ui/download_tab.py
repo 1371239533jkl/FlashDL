@@ -42,36 +42,66 @@ class TaskCard(QFrame):
         # 第一行: 文件名 + 文件大小
         row1 = QHBoxLayout()
         self.name_label = QLabel(info.get('file_name', '准备中...'))
-        self.name_label.setObjectName('BoldLabel')
+        self.name_label.setObjectName('TaskName')
         row1.addWidget(self.name_label)
         row1.addStretch()
         total = info.get('total_size', -1)
         self.size_label = QLabel(format_size(total) if total > 0 else '未知大小')
-        self.size_label.setObjectName('SecondaryLabel')
+        self.size_label.setObjectName('TaskSize')
         row1.addWidget(self.size_label)
         layout.addLayout(row1)
 
-        # 第二行: 进度条
+        # 第二行: 进度条 + 百分比
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(12)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(6)
-        layout.addWidget(self.progress_bar)
+        self.progress_bar.setFixedHeight(4)
+        prog_row.addWidget(self.progress_bar)
+        self.progress_pct = QLabel('')
+        self.progress_pct.setObjectName('MonoLabel')
+        self.progress_pct.setFixedWidth(40)
+        self.progress_pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        prog_row.addWidget(self.progress_pct)
+        layout.addLayout(prog_row)
 
-        # 第三行: 速度、进度百分比、剩余时间
+        # 第三行: 速度 / 已下载 / 剩余时间 (统计行)
         row3 = QHBoxLayout()
+        row3.setSpacing(20)
+
+        stat_speed = QVBoxLayout()
+        stat_speed.setSpacing(2)
+        sl1 = QLabel('速度')
+        sl1.setObjectName('StatLabel')
+        stat_speed.addWidget(sl1)
         self.speed_label = QLabel('等待中')
-        self.speed_label.setObjectName('SecondaryLabel')
-        row3.addWidget(self.speed_label)
-        row3.addStretch()
-        self.progress_label = QLabel('')
-        self.progress_label.setObjectName('SecondaryLabel')
-        row3.addWidget(self.progress_label)
-        row3.addStretch()
+        self.speed_label.setObjectName('StatValue')
+        stat_speed.addWidget(self.speed_label)
+        row3.addLayout(stat_speed)
+
+        stat_dl = QVBoxLayout()
+        stat_dl.setSpacing(2)
+        sl2 = QLabel('已下载')
+        sl2.setObjectName('StatLabel')
+        stat_dl.addWidget(sl2)
+        self.downloaded_label = QLabel('')
+        self.downloaded_label.setObjectName('StatValue')
+        stat_dl.addWidget(self.downloaded_label)
+        row3.addLayout(stat_dl)
+
+        stat_remain = QVBoxLayout()
+        stat_remain.setSpacing(2)
+        sl3 = QLabel('剩余')
+        sl3.setObjectName('StatLabel')
+        stat_remain.addWidget(sl3)
         self.time_label = QLabel('')
-        self.time_label.setObjectName('SecondaryLabel')
-        row3.addWidget(self.time_label)
+        self.time_label.setObjectName('StatValue')
+        stat_remain.addWidget(self.time_label)
+        row3.addLayout(stat_remain)
+
+        row3.addStretch()
         layout.addLayout(row3)
 
         # 第四行: 操作按钮
@@ -155,7 +185,9 @@ class TaskCard(QFrame):
 
     def update_progress(self, progress_info: dict):
         """更新进度信息"""
-        self.progress_bar.setValue(int(progress_info.get('progress', 0)))
+        pct = progress_info.get('progress', 0)
+        self.progress_bar.setValue(int(pct))
+        self.progress_pct.setText(f'{pct:.1f}%')
         speed_text = progress_info.get('speed_text', '')
         # 显示 BT 连接数(如果有)
         peer_count = progress_info.get('peer_count')
@@ -163,10 +195,8 @@ class TaskCard(QFrame):
             speed_text += f'  [{peer_count}个连接]'
         self.speed_label.setText(speed_text)
         downloaded = progress_info.get('downloaded_text', '')
-        total = progress_info.get('total_text', '')
-        pct = progress_info.get('progress', 0)
-        self.progress_label.setText(f'{downloaded} / {total}  ({pct:.1f}%)')
-        self.time_label.setText(f"剩余 {progress_info.get('remaining_time', '--:--')}")
+        self.downloaded_label.setText(downloaded)
+        self.time_label.setText(progress_info.get('remaining_time', '--:--'))
         # 进度更新时刷新按钮状态（边下边播按钮可能在跨过5%阈值后出现）
         self._update_button_states()
 
@@ -494,89 +524,109 @@ class DownloadTab(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
 
-        # 输入区域
+        # ── URL 输入区 (HTML匹配: textarea + 右侧按钮组) ──
         input_frame = QFrame()
-        input_layout = QVBoxLayout(input_frame)
+        input_frame.setObjectName('UrlInputArea')
+        input_frame.setFixedHeight(56)
+
+        input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(8)
 
-        # URL输入行（支持多行粘贴批量添加）
-        url_row = QHBoxLayout()
-        url_label = QLabel('下载链接:')
-        url_label.setFixedWidth(65)
-        url_row.addWidget(url_label)
-
-        input_container = QVBoxLayout()
-        input_container.setSpacing(0)
         self.url_input = QPlainTextEdit()
-        self.url_input.setPlaceholderText('输入下载链接 (HTTP/HTTPS/磁力链接)，支持多行批量粘贴')
-        self.url_input.setMaximumHeight(60)  # 限制约3行高度
-        input_container.addWidget(self.url_input)
+        self.url_input.setPlaceholderText('粘贴下载链接或磁力链接...  (HTTP / HTTPS / magnet / BT)')
+        self.url_input.setFixedHeight(56)
+        input_layout.addWidget(self.url_input)
 
-        url_row.addLayout(input_container)
-        self.btn_add = QPushButton('添加')
+        # 按钮组固定 56px 高，与文本框等高
+        btn_group_widget = QWidget()
+        btn_group_widget.setFixedSize(120, 56)
+        btn_group = QVBoxLayout(btn_group_widget)
+        btn_group.setContentsMargins(0, 0, 0, 0)
+        btn_group.setSpacing(8)
+        self.btn_add = QPushButton('+ 添加下载')
         self.btn_add.setObjectName('PrimaryBtn')
-        self.btn_add.setFixedWidth(70)
+        self.btn_add.setFixedHeight(24)
         self.btn_add.clicked.connect(self._add_task)
-        url_row.addWidget(self.btn_add)
-        input_layout.addLayout(url_row)
+        btn_group.addWidget(self.btn_add)
 
-        # 状态提示
+        btn_import = QPushButton('从文件导入')
+        btn_import.setObjectName('GhostBtn')
+        btn_import.setFixedHeight(24)
+        btn_import.clicked.connect(self._import_from_file)
+        btn_group.addWidget(btn_import)
+        input_layout.addWidget(btn_group_widget)
+
+
+
+
+        # 状态提示（隐藏时不加入布局，避免占用空间）
         self.status_label = QLabel()
         self.status_label.setObjectName('StatusInfo')
-        self.status_label.hide()
-        input_layout.addWidget(self.status_label)
+        self.status_label.setVisible(False)
 
-        # 保存路径 + 线程数
+        layout.addWidget(input_frame)
+
+        # ── 工具栏 (HTML匹配: 保存路径 + 线程 + 限速 + 操作) ──
+        toolbar = QFrame()
+        toolbar.setObjectName('DownloadToolbar')
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(6, 4, 6, 4)
+        toolbar_layout.setSpacing(6)
+
         saved_dir = get_setting('download_dir', config.DEFAULT_DOWNLOAD_DIR)
         saved_threads = get_setting('thread_count', config.DEFAULT_THREAD_COUNT)
 
-        path_row = QHBoxLayout()
-        path_label = QLabel('保存路径:')
-        path_label.setFixedWidth(65)
-        path_row.addWidget(path_label)
-        self.path_input = QLineEdit(saved_dir)
-        self.path_input.editingFinished.connect(self._save_download_settings)
-        path_row.addWidget(self.path_input)
-        btn_browse = QPushButton('浏览')
-        btn_browse.setFixedWidth(60)
-        btn_browse.clicked.connect(self._browse_save_dir)
-        path_row.addWidget(btn_browse)
+        tl = QLabel('保存至')
+        tl.setObjectName('ToolbarLabel')
+        toolbar_layout.addWidget(tl)
 
-        path_row.addSpacing(16)
-        thread_label = QLabel('线程数:')
-        path_row.addWidget(thread_label)
+        self.path_input = QLineEdit(saved_dir)
+        self.path_input.setObjectName('ToolbarPath')
+        self.path_input.setMinimumWidth(200)
+        self.path_input.editingFinished.connect(self._save_download_settings)
+        toolbar_layout.addWidget(self.path_input, 1)
+
+        btn_browse = QPushButton('浏览')
+        btn_browse.setObjectName('SmallBtn')
+        btn_browse.setFixedWidth(48)
+        btn_browse.clicked.connect(self._browse_save_dir)
+        toolbar_layout.addWidget(btn_browse)
+
+        # 分隔线
+        div1 = QWidget()
+        div1.setObjectName('ToolbarDivider')
+        toolbar_layout.addWidget(div1)
+
+        tl2 = QLabel('线程')
+        tl2.setObjectName('ToolbarLabel')
+        toolbar_layout.addWidget(tl2)
+
         self.thread_combo = QComboBox()
         for i in [1, 2, 4, 8, 16]:
             self.thread_combo.addItem(str(i), i)
         self.thread_combo.setCurrentText(str(saved_threads))
         self.thread_combo.currentIndexChanged.connect(self._save_download_settings)
-        self.thread_combo.setFixedWidth(60)
-        path_row.addWidget(self.thread_combo)
-        input_layout.addLayout(path_row)
+        self.thread_combo.setFixedWidth(50)
+        toolbar_layout.addWidget(self.thread_combo)
 
-        layout.addWidget(input_frame)
+        # 分隔线
+        div2 = QWidget()
+        div2.setObjectName('ToolbarDivider')
+        toolbar_layout.addWidget(div2)
 
-        # 操作按钮行
-        action_row = QHBoxLayout()
-        action_row.addStretch()
+        tl3 = QLabel('限速')
+        tl3.setObjectName('ToolbarLabel')
+        toolbar_layout.addWidget(tl3)
 
-        # 速度限制下拉
-        speed_label = QLabel('限速:')
-        speed_label.setObjectName('SecondaryLabel')
-        action_row.addWidget(speed_label)
         self.speed_limit_combo = QComboBox()
         self.speed_limit_combo.addItem('无限制', 0)
-        self.speed_limit_combo.addItem('100 KB/s', 100 * 1024)
-        self.speed_limit_combo.addItem('500 KB/s', 500 * 1024)
         self.speed_limit_combo.addItem('1 MB/s', 1024 * 1024)
-        self.speed_limit_combo.addItem('2 MB/s', 2 * 1024 * 1024)
         self.speed_limit_combo.addItem('5 MB/s', 5 * 1024 * 1024)
         self.speed_limit_combo.addItem('10 MB/s', 10 * 1024 * 1024)
-        # 恢复上次设置
         saved_speed = get_setting('download_speed_limit', config.DOWNLOAD_SPEED_LIMIT)
         for i in range(self.speed_limit_combo.count()):
             if self.speed_limit_combo.itemData(i) == saved_speed:
@@ -584,22 +634,29 @@ class DownloadTab(QWidget):
                 config.DOWNLOAD_SPEED_LIMIT = saved_speed
                 break
         self.speed_limit_combo.currentIndexChanged.connect(self._on_speed_limit_changed)
-        self.speed_limit_combo.setFixedWidth(90)
-        action_row.addWidget(self.speed_limit_combo)
+        self.speed_limit_combo.setFixedWidth(80)
+        toolbar_layout.addWidget(self.speed_limit_combo)
+
+        toolbar_layout.addStretch()
 
         btn_pause_all = QPushButton('全部暂停')
+        btn_pause_all.setObjectName('SmallBtn')
         btn_pause_all.clicked.connect(self._pause_all)
-        action_row.addWidget(btn_pause_all)
+        toolbar_layout.addWidget(btn_pause_all)
         btn_clear_completed = QPushButton('清除已完成')
+        btn_clear_completed.setObjectName('SmallBtn')
         btn_clear_completed.clicked.connect(self._clear_completed)
-        action_row.addWidget(btn_clear_completed)
+        toolbar_layout.addWidget(btn_clear_completed)
         btn_clear_all = QPushButton('清除全部')
         btn_clear_all.setObjectName('DangerBtn')
+        btn_clear_all.setProperty('class', 'btn-sm')
         btn_clear_all.clicked.connect(self._clear_all_tasks)
-        action_row.addWidget(btn_clear_all)
-        layout.addLayout(action_row)
+        toolbar_layout.addWidget(btn_clear_all)
 
-        # 下载列表(滚动区域，支持拖拽排序)
+        self.toolbar = toolbar
+        layout.addWidget(self.toolbar)
+
+        # ── 下载列表(滚动区域，支持拖拽排序) ──
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -607,8 +664,69 @@ class DownloadTab(QWidget):
         self._list_widget = _ReorderWidget(self)
         self._list_layout = self._list_widget.layout()
 
+        # 空状态提示
+        self._empty_state = self._create_empty_state()
+        self._list_layout.insertWidget(self._list_layout.count() - 1, self._empty_state)
+
         self._scroll_area.setWidget(self._list_widget)
-        layout.addWidget(self._scroll_area)
+        layout.addWidget(self._scroll_area, 1)
+
+        # ── 状态栏 ──
+        status_bar = QFrame()
+        status_bar.setObjectName('DownloadStatusBar')
+        status_bar_layout = QHBoxLayout(status_bar)
+        status_bar_layout.setContentsMargins(6, 2, 6, 2)
+        status_bar_layout.setSpacing(8)
+
+        self._status_dot = QLabel()
+        self._status_dot.setObjectName('StatusDot')
+        self._status_dot.setProperty('idle', True)
+        status_bar_layout.addWidget(self._status_dot)
+
+        self._status_text = QLabel('就绪')
+        self._status_text.setObjectName('MonoLabel')
+        status_bar_layout.addWidget(self._status_text)
+
+        status_bar_layout.addStretch()
+
+        self._status_speed = QLabel('')
+        self._status_speed.setObjectName('MonoAccent')
+        status_bar_layout.addWidget(self._status_speed)
+
+        layout.addWidget(status_bar)
+
+    def _create_empty_state(self) -> QWidget:
+        """创建列表空状态提示"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 36, 0, 36)
+        layout.setSpacing(12)
+        layout.addStretch()
+
+        icon = QLabel('↓')
+        icon.setObjectName('EmptyStateIcon')
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon)
+
+        text = QLabel('暂无下载任务')
+        text.setObjectName('EmptyStateText')
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(text)
+
+        hint = QLabel('在上方粘贴链接，点击"添加下载"开始')
+        hint.setObjectName('EmptyStateHint')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+        layout.addStretch()
+        return widget
+
+    def _update_empty_state(self):
+        """根据任务数量显示/隐藏空状态"""
+        has_cards = len(self._cards) > 0
+        if self._empty_state.isVisible() == has_cards:
+            self._empty_state.setVisible(not has_cards)
+            self._list_layout.activate()
 
     def _connect_signals(self):
         signal_bus.task_created.connect(self._on_task_created)
@@ -643,6 +761,7 @@ class DownloadTab(QWidget):
                 card = TaskCard(task.task_id, task.get_info(), self.download_manager)
                 self._cards[task.task_id] = card
                 self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+                self._update_empty_state()
                 # 后台异步执行 prepare()
                 from core.task_worker import PrepareWorker
                 worker = PrepareWorker(task)
@@ -754,14 +873,77 @@ class DownloadTab(QWidget):
         self.status_label.setObjectName('StatusError' if is_error else 'StatusSuccess')
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
-        self.status_label.show()
-        QTimer.singleShot(3000, self.status_label.hide)
+        # 动态插入到工具栏上方
+        if self.status_label.parent() is None:
+            self.layout().insertWidget(self.layout().indexOf(self.toolbar), self.status_label)
+        self.status_label.setVisible(True)
+        QTimer.singleShot(3000, self._hide_status)
+
+    def _hide_status(self):
+        """隐藏状态提示并从布局移除"""
+        self.status_label.setVisible(False)
+        self.layout().removeWidget(self.status_label)
+        self.status_label.setParent(None)
 
     def _scroll_to_bottom(self):
         """将下载列表滚动到底部"""
         self._scroll_area.verticalScrollBar().setValue(
             self._scroll_area.verticalScrollBar().maximum()
         )
+
+    def _import_from_file(self):
+        """从文本文件导入下载链接"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, '导入下载链接', '',
+            '文本文件 (*.txt);;所有文件 (*)')
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            if content:
+                current = self.url_input.toPlainText().strip()
+                if current:
+                    self.url_input.setPlainText(current + '\n' + content)
+                else:
+                    self.url_input.setPlainText(content)
+                self._show_status('已导入链接列表')
+        except Exception as e:
+            self._show_status(f'导入失败: {e}', is_error=True)
+
+    def _update_status_bar(self):
+        """更新底部状态栏"""
+        tasks = self.download_manager.tasks
+        total = len(tasks)
+        active = sum(1 for t in tasks.values()
+                     if t.status in (DownloadTask.DOWNLOADING, 'resolving_metadata'))
+        completed = sum(1 for t in tasks.values() if t.status == DownloadTask.COMPLETED)
+        waiting = sum(1 for t in tasks.values() if t.status in (DownloadTask.WAITING, DownloadTask.PAUSED))
+
+        if total == 0:
+            self._status_dot.setProperty('idle', True)
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            self._status_text.setText('就绪')
+            self._status_speed.setText('')
+        elif active > 0:
+            self._status_dot.setProperty('idle', False)
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            parts = [f'{total} 个任务']
+            if active: parts.append(f'下载中: {active}')
+            if waiting: parts.append(f'等待中: {waiting}')
+            if completed: parts.append(f'已完成: {completed}')
+            self._status_text.setText(' · '.join(parts))
+            self._status_speed.setText('')
+        else:
+            self._status_dot.setProperty('idle', True)
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            parts = [f'{total} 个任务']
+            if completed: parts.append(f'已完成: {completed}')
+            self._status_text.setText(' · '.join(parts))
+            self._status_speed.setText('')
 
     def _browse_save_dir(self):
         dir_path = QFileDialog.getExistingDirectory(self, '选择保存目录', self.path_input.text())
@@ -780,17 +962,20 @@ class DownloadTab(QWidget):
             card = TaskCard(task_id, info, self.download_manager)
             self._cards[task_id] = card
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+            self._update_empty_state()
         else:
             # 更新已有卡片的文件名和大小
             card = self._cards[task_id]
             card.name_label.setText(info.get('file_name', ''))
             total = info.get('total_size', -1)
             card.size_label.setText(format_size(total) if total > 0 else '未知大小')
+        self._update_status_bar()
 
     def _on_task_progress(self, task_id: str, progress_info: dict):
         card = self._cards.get(task_id)
         if card:
             card.update_progress(progress_info)
+        self._update_status_bar()
 
     def _on_task_status_changed(self, task_id: str, status: str):
         card = self._cards.get(task_id)
@@ -805,6 +990,7 @@ class DownloadTab(QWidget):
             card._queue_info = ''
         
         card.update_status(status)
+        self._update_status_bar()
 
     def _on_task_completed(self, task_id: str, file_path: str):
         card = self._cards.get(task_id)
@@ -825,6 +1011,7 @@ class DownloadTab(QWidget):
                 status='completed', created_time=task.created_time,
                 completed_time=time.strftime('%Y-%m-%d %H:%M:%S')
             )
+        self._update_status_bar()
 
     def _reset_card_highlight(self, card):
         """恢复任务卡片默认样式"""
@@ -843,6 +1030,7 @@ class DownloadTab(QWidget):
 
         # 保存失败记录
         task = self.download_manager.tasks.get(task_id)
+        self._update_status_bar()
         if task:
             self.db.add_record(
                 task_id=task_id, url=task.url, file_name=task.file_name,
@@ -877,7 +1065,7 @@ class DownloadTab(QWidget):
             text = clipboard.text()
         except Exception:
             return
-        if not text:
+        if not text or not isinstance(text, str):
             return
         # 智能防抖：内容相同则跳过（解决 Windows 剪贴板锁重复触发），
         # 内容不同则立即处理（快速复制多个链接不会丢失）
@@ -929,9 +1117,11 @@ class DownloadTab(QWidget):
             card.hide()  # 先隐藏，立即生效
             self._list_layout.removeWidget(card)
             card.deleteLater()
+        self._update_empty_state()
         # 强制刷新布局
         self._list_layout.activate()
         self._list_widget.updateGeometry()
+        self._update_status_bar()
         # 后台异步清理（已完成的任务只需从内存移除，无需 cancel）
         for task_id in to_remove:
             self.download_manager.remove_task(task_id)
@@ -964,6 +1154,7 @@ class DownloadTab(QWidget):
             card.hide()  # 先隐藏，立即生效
             self._list_layout.removeWidget(card)
             card.deleteLater()
+        self._update_empty_state()
         # 强制刷新布局
         self._list_layout.activate()
         self._list_widget.updateGeometry()

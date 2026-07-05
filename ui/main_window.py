@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """主窗口 - 无边框窗口、标签页管理、系统托盘"""
 
-from PyQt6.QtCore import Qt, QPoint, QSize, QRect, QPropertyAnimation
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPolygon
+from PyQt6.QtCore import Qt, QPoint, QSize, QRect
+import math
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen, QPolygon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication,
-    QGraphicsOpacityEffect
+    QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication
 )
 
 import config
@@ -60,10 +60,20 @@ class MainWindow(QMainWindow):
         return QIcon(pixmap)
 
     def _setup_ui(self):
-        """构建界面"""
+        """构建界面 - 侧边栏 + (标题栏 + 标签页)"""
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ── 左侧边栏 ──
+        self._sidebar = self._create_sidebar()
+        root_layout.addWidget(self._sidebar)
+
+        # ── 右侧主体 ──
+        main_area = QWidget()
+        main_layout = QVBoxLayout(main_area)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
@@ -74,6 +84,8 @@ class MainWindow(QMainWindow):
         # 标签页
         self.tab_widget = QTabWidget()
         self.tab_widget.setDocumentMode(True)
+        # 隐藏原生标签栏（使用自定义 TabBar 替代 QTabBar）
+        self.tab_widget.tabBar().hide()
         # 禁用键盘方向键切换标签页（会与全屏播放快捷键冲突）
         _orig = self.tab_widget.keyPressEvent
         def _filtered(event):
@@ -83,6 +95,8 @@ class MainWindow(QMainWindow):
                 _orig(event)
         self.tab_widget.keyPressEvent = _filtered
         main_layout.addWidget(self.tab_widget)
+
+        root_layout.addWidget(main_area)
 
         # 延迟导入标签页(避免循环导入)
         from ui.download_tab import DownloadTab
@@ -97,64 +111,209 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.player_tab, '视频播放')
         self.tab_widget.addTab(self.history_tab, '历史记录')
 
-        # 主题切换过渡遮罩
-        self._theme_overlay = QWidget(central)
-        self._theme_overlay.hide()
-        self._theme_overlay_effect = QGraphicsOpacityEffect(self._theme_overlay)
-        self._theme_overlay.setGraphicsEffect(self._theme_overlay_effect)
-        self._theme_overlay_effect.setOpacity(0.0)
-        self._theme_overlay_anim = None
+    def _create_sidebar(self) -> QWidget:
+        """创建左侧 48px 图标导航栏（使用自绘图标）"""
+        sidebar = QWidget()
+        sidebar.setObjectName('Sidebar')
+        sidebar.setFixedWidth(config.SIDEBAR_WIDTH)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(6, 12, 6, 12)
+        layout.setSpacing(4)
+
+        icons_data = [
+            (0, 'download', '下载管理'),
+            (1, 'play', '视频播放'),
+            (2, 'history', '历史记录'),
+        ]
+        self._sidebar_icons: dict[int, QPushButton] = {}
+        for tab_idx, icon_type, tip in icons_data:
+            btn = QPushButton()
+            btn.setObjectName('SidebarIcon')
+            btn.setToolTip(tip)
+            btn.setFixedSize(36, 36)
+            btn.setIcon(self._make_sidebar_icon(icon_type))
+            btn.setIconSize(QSize(24, 24))
+            btn.clicked.connect(lambda checked, i=tab_idx: self._on_sidebar_click(i))
+            self._sidebar_icons[tab_idx] = btn
+            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # 标记初始激活
+        self._sidebar_icons[0].setProperty('active', True)
+        self._sidebar_icons[0].setIcon(self._make_sidebar_icon('download', active=True))
+        self._sidebar_icons[0].style().unpolish(self._sidebar_icons[0])
+        self._sidebar_icons[0].style().polish(self._sidebar_icons[0])
+
+        layout.addStretch()
+
+        # 设置按钮
+        btn_settings = QPushButton()
+        btn_settings.setObjectName('SidebarIcon')
+        btn_settings.setToolTip('设置')
+        btn_settings.setFixedSize(36, 36)
+        btn_settings.setIcon(self._make_sidebar_icon('settings'))
+        btn_settings.setIconSize(QSize(24, 24))
+        btn_settings.clicked.connect(self._open_settings)
+        layout.addWidget(btn_settings, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        return sidebar
+
+    def _make_window_icon(self, icon_type: str) -> QIcon:
+        """统一绘制标题栏窗口控制图标：minimize/maximize/close/restore"""
+        from ui.styles import get_tokens
+        t = get_tokens()
+        pix = QPixmap(16, 16)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(t.text_muted), 1.5)
+        p.setPen(pen)
+        if icon_type == 'minimize':
+            p.drawLine(3, 12, 13, 12)
+        elif icon_type == 'maximize':
+            p.drawRect(4, 4, 8, 8)
+        elif icon_type == 'restore':
+            p.drawRect(5, 7, 6, 5)
+            p.drawLine(5, 7, 10, 2)
+            p.drawLine(10, 2, 11, 2)
+            p.drawLine(11, 2, 11, 7)
+        else:  # close
+            p.drawLine(4, 4, 12, 12)
+            p.drawLine(12, 4, 4, 12)
+        p.end()
+        return QIcon(pix)
+
+
+
+    def _make_sidebar_icon(self, icon_type: str, active: bool = False) -> QIcon:
+        """绘制侧边栏单色图标（24px，更显眼）"""
+        from ui.styles import get_tokens
+        t = get_tokens()
+        size = 36
+        icon_size = 24
+        color = t.accent if active else t.text_secondary
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        x = (size - icon_size) // 2  # = 6
+        y = (size - icon_size) // 2  # = 6
+        if icon_type == 'download':
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(color))
+            p.drawRect(x + 9, y + 2, 6, 11)
+            triangle = QPolygon([
+                QPoint(x + 3, y + 13),
+                QPoint(x + 21, y + 13),
+                QPoint(x + 12, y + 22)
+            ])
+            p.drawPolygon(triangle)
+        elif icon_type == 'play':
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(color))
+            triangle = QPolygon([
+                QPoint(x + 4, y + 3),
+                QPoint(x + 4, y + 21),
+                QPoint(x + 20, y + 12)
+            ])
+            p.drawPolygon(triangle)
+        elif icon_type == 'history':
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            pen = QPen(QColor(color), 2)
+            p.setPen(pen)
+            p.drawEllipse(x + 2, y + 2, 20, 20)
+            p.drawLine(x + 12, y + 7, x + 12, y + 13)
+            p.drawLine(x + 12, y + 13, x + 17, y + 13)
+        elif icon_type == 'settings':
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            pen = QPen(QColor(color), 2)
+            p.setPen(pen)
+            # 三条水平线 + 滑动圆点（调音台图标）
+            p.drawLine(x + 2, y + 5, x + 20, y + 5)
+            p.drawLine(x + 2, y + 12, x + 20, y + 12)
+            p.drawLine(x + 2, y + 19, x + 20, y + 19)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(color))
+            p.drawEllipse(x + 7, y + 2, 7, 7)
+            p.drawEllipse(x + 13, y + 9, 7, 7)
+            p.drawEllipse(x + 4, y + 16, 7, 7)
+        p.end()
+        return QIcon(pix)
+
+
+
+    def _on_sidebar_click(self, index: int):
+        """侧边栏导航点击"""
+        self.tab_widget.setCurrentIndex(index)
+        self._update_sidebar_active(index)
+
+    def _on_tab_changed(self, index: int):
+        """标签页切换时同步侧边栏"""
+        self._update_sidebar_active(index)
+
+    def _update_sidebar_active(self, index: int):
+        """更新侧边栏图标激活状态"""
+        icons = ['download', 'play', 'history']
+        for i, btn in self._sidebar_icons.items():
+            is_active = (i == index)
+            btn.setProperty('active', is_active)
+            btn.setIcon(self._make_sidebar_icon(icons[i], active=is_active))
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     def _create_title_bar(self) -> QWidget:
-        """创建自定义标题栏"""
+        """创建自定义标题栏 (44px)"""
         bar = QWidget()
         bar.setObjectName('TitleBar')
         bar.setFixedHeight(config.TITLE_BAR_HEIGHT)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setSpacing(4)
 
-        title = QLabel(config.APP_NAME)
+        # 标题
+        title = QLabel('FlashDL')
         title.setObjectName('TitleLabel')
         layout.addWidget(title)
+
+        version = QLabel('v2.0')
+        version.setObjectName('TitleVersion')
+        layout.addWidget(version)
+
         layout.addStretch()
 
-        # 主题切换按钮 (太阳/月亮 Emoji)
+        # 主题切换按钮
         self._btn_theme = QPushButton('☀')
         self._btn_theme.setObjectName('TitleBtn')
-        self._btn_theme.setFixedSize(46, config.TITLE_BAR_HEIGHT)
+        self._btn_theme.setFixedSize(28, 28)
         self._btn_theme.setToolTip('切换浅色/深色主题')
         self._btn_theme.clicked.connect(self._toggle_theme)
         layout.addWidget(self._btn_theme)
 
-        # 设置按钮
-        self._btn_settings = QPushButton('⚙')
-        self._btn_settings.setObjectName('TitleBtn')
-        self._btn_settings.setFixedSize(46, config.TITLE_BAR_HEIGHT)
-        self._btn_settings.setToolTip('设置')
-        self._btn_settings.clicked.connect(self._open_settings)
-        layout.addWidget(self._btn_settings)
-
         # 最小化按钮
-        btn_min = QPushButton('—')
-        btn_min.setObjectName('TitleBtn')
-        btn_min.setFixedSize(46, config.TITLE_BAR_HEIGHT)
-        btn_min.clicked.connect(self._minimize_to_tray)
-        layout.addWidget(btn_min)
+        self._btn_min = QPushButton('—')
+        self._btn_min.setObjectName('TitleBtn')
+        self._btn_min.setFixedSize(28, 28)
+        self._btn_min.clicked.connect(self._minimize_to_tray)
+        layout.addWidget(self._btn_min)
 
         # 最大化按钮
         self._btn_max = QPushButton('□')
         self._btn_max.setObjectName('TitleBtn')
-        self._btn_max.setFixedSize(46, config.TITLE_BAR_HEIGHT)
+        self._btn_max.setFixedSize(28, 28)
         self._btn_max.clicked.connect(self._toggle_maximize)
         layout.addWidget(self._btn_max)
 
         # 关闭按钮
-        btn_close = QPushButton('✕')
-        btn_close.setObjectName('CloseBtn')
-        btn_close.setFixedSize(46, config.TITLE_BAR_HEIGHT)
-        btn_close.clicked.connect(self.close)
-        layout.addWidget(btn_close)
+        self._btn_close = QPushButton('X')
+        self._btn_close.setObjectName('CloseBtn')
+        self._btn_close.setFixedSize(28, 28)
+        self._btn_close.clicked.connect(self.close)
+        layout.addWidget(self._btn_close)
+
+
+
+
+
 
         return bar
 
@@ -181,6 +340,8 @@ class MainWindow(QMainWindow):
         """连接全局信号"""
         signal_bus.show_notification.connect(self._show_tray_notification)
         signal_bus.play_video.connect(self._play_video)
+        # 标签页切换时更新侧边栏
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
     def _show_tray_notification(self, title: str, message: str):
         """显示托盘通知"""
@@ -213,6 +374,8 @@ class MainWindow(QMainWindow):
             self.showMaximized()
             self._btn_max.setText('▣')
 
+
+
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._show_from_tray()
@@ -233,57 +396,31 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _toggle_theme(self):
-        """切换深色/浅色主题（带淡入淡出过渡）"""
-        # 停止正在进行的动画
-        if self._theme_overlay_anim is not None:
-            self._theme_overlay_anim.stop()
-            self._theme_overlay_anim = None
-        t = get_tokens()
-        # 设置遮罩为当前主题背景色，完全显示
-        self._theme_overlay.setStyleSheet(f'background-color: {t.bg_primary};')
-        self._theme_overlay.setGeometry(self.centralWidget().rect())
-        self._theme_overlay.raise_()
-        self._theme_overlay.show()
-        self._theme_overlay_effect.setOpacity(1.0)
-        # 淡出遮罩 → 露出新主题
-        self._apply_theme()
-        self._fade_out_overlay()
-
-    def _apply_theme(self):
-        """应用主题切换（不含过渡）"""
+        """切换深色/浅色主题"""
         current = get_current_theme()
         new_theme = 'light' if current == 'dark' else 'dark'
         set_current_theme(new_theme)
         app = QApplication.instance()
+        # 禁用更新以减少闪烁
+        self.setUpdatesEnabled(False)
         app.setStyleSheet(get_stylesheet(new_theme))
-        app.processEvents()
         self._btn_theme.setText('☀' if new_theme == 'dark' else '🌙')
         self._app_icon = self._create_app_icon()
         self.setWindowIcon(self._app_icon)
         self.tray_icon.setIcon(self._app_icon)
         self.player_tab.video_widget.setStyleSheet('background-color: #000000; border-radius: 6px;')
+        # 只重绘侧边栏图标（它们需要手动更新颜色）
+        icons = ['download', 'play', 'history']
+        for i, btn in self._sidebar_icons.items():
+            is_active = btn.property('active') or False
+            btn.setIcon(self._make_sidebar_icon(icons[i], active=is_active))
+        self.setUpdatesEnabled(True)
+        # 一次性强制刷新
         self.repaint()
         self.history_tab.refresh()
 
-    def _fade_out_overlay(self):
-        """淡出主题过渡遮罩（200ms）"""
-        self._theme_overlay_anim = QPropertyAnimation(self._theme_overlay_effect, b'opacity')
-        self._theme_overlay_anim.setDuration(200)
-        self._theme_overlay_anim.setStartValue(1.0)
-        self._theme_overlay_anim.setEndValue(0.0)
-        self._theme_overlay_anim.finished.connect(self._on_overlay_fade_finished)
-        self._theme_overlay_anim.start()
-
-    def _on_overlay_fade_finished(self):
-        """过渡动画结束后清理"""
-        self._theme_overlay.hide()
-        self._theme_overlay_anim = None
-
     def resizeEvent(self, event):
-        """窗口大小变化时同步遮罩尺寸"""
         super().resizeEvent(event)
-        if hasattr(self, '_theme_overlay'):
-            self._theme_overlay.setGeometry(self.centralWidget().rect())
 
     # === 窗口拖动与缩放 ===
     def mousePressEvent(self, event):
@@ -384,28 +521,39 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _save_geometry(self):
-        """保存窗口位置和大小到设置"""
+        """保存窗口位置和大小到设置（仅保存非最大化状态）"""
+        if self.isMaximized():
+            return  # 最大化时不保存几何信息，避免下次启动异常
         geo = self.geometry()
         set_setting('window_geometry', {
             'x': geo.x(), 'y': geo.y(),
             'w': geo.width(), 'h': geo.height(),
-            'maximized': self.isMaximized()
         })
 
     def _restore_geometry(self):
-        """从设置恢复窗口位置和大小"""
+        """恢复上次关闭时的窗口位置和大小"""
         geo_data = get_setting('window_geometry', None)
         if geo_data:
-            self.resize(geo_data.get('w', config.WINDOW_WIDTH),
-                        geo_data.get('h', config.WINDOW_HEIGHT))
-            self.move(geo_data.get('x', 0), geo_data.get('y', 0))
-            if geo_data.get('maximized', False):
-                self.showMaximized()
-                # 延迟更新按钮文字（此时 _btn_max 可能尚未创建）
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._btn_max.setText('▣') if hasattr(self, '_btn_max') else None)
-        else:
-            self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
+            w, h = geo_data.get('w', 0), geo_data.get('h', 0)
+            x, y = geo_data.get('x', 0), geo_data.get('y', 0)
+            screen = QApplication.primaryScreen()
+            if screen and w > 0 and h > 0:
+                sg = screen.availableGeometry()
+                # 钳制到屏幕范围内
+                w = min(w, sg.width())
+                h = min(h, sg.height())
+                x = max(sg.x(), min(x, sg.x() + sg.width() - 200))
+                y = max(sg.y(), min(y, sg.y() + sg.height() - 200))
+                self.resize(w, h)
+                self.move(x, y)
+                return
+        # 无保存数据时，默认大小居中
+        self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
+        screen = QApplication.primaryScreen()
+        if screen:
+            sg = screen.availableGeometry()
+            self.move(sg.x() + (sg.width() - config.WINDOW_WIDTH) // 2,
+                      sg.y() + (sg.height() - config.WINDOW_HEIGHT) // 2)
 
     def _shutdown_magnet_session(self):
         """安全关闭 libtorrent 会话"""

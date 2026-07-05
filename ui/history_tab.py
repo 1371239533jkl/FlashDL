@@ -28,81 +28,112 @@ class HistoryCard(QFrame):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(6)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(12)
 
-        # 第一行: 文件名 + 状态
-        row1 = QHBoxLayout()
+        # 状态圆点
         status = self.record.get('status', '')
-        icon = '✓' if status == 'completed' else '✗'
+        self.status_dot = QLabel('✓' if status == 'completed' else '✕')
+        self.status_dot.setObjectName(
+            'HistoryStatusSuccess' if status == 'completed' else 'HistoryStatusError')
+        self.status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_dot.setFixedSize(20, 20)
+        layout.addWidget(self.status_dot)
 
-        name_label = QLabel(f'{icon} {self.record.get("file_name", "未知文件")}')
+        # 中间信息区
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+
+        name_label = QLabel(self.record.get('file_name', '未知文件'))
         name_label.setObjectName('BoldLabel')
-        row1.addWidget(name_label)
-        row1.addStretch()
+        name_label.setMinimumWidth(0)
+        info_layout.addWidget(name_label)
 
-        size = self.record.get('file_size', 0)
-        size_label = QLabel(format_size(size) if size > 0 else '')
-        size_label.setObjectName('SecondaryLabel')
-        row1.addWidget(size_label)
-        layout.addLayout(row1)
-
-        # 第二行: 时间信息
-        row2 = QHBoxLayout()
+        meta_layout = QHBoxLayout()
+        meta_layout.setSpacing(12)
         created = self.record.get('created_time', '')
         completed = self.record.get('completed_time', '')
-        time_text = f'创建时间: {created}'
         if completed:
-            time_text += f'  |  完成时间: {completed}'
-        time_label = QLabel(time_text)
-        time_label.setObjectName('SecondaryLabel')
-        row2.addWidget(time_label)
-        row2.addStretch()
-        layout.addLayout(row2)
+            meta_text = f'{created}  →  {completed}'
+        else:
+            meta_text = str(created)
+        meta_label = QLabel(meta_text)
+        meta_label.setObjectName('SecondaryLabel')
+        meta_layout.addWidget(meta_label)
+        info_layout.addLayout(meta_layout)
 
-        # 第三行: 操作按钮（画出来的图标）
-        row3 = QHBoxLayout()
-        row3.addStretch()
+        layout.addLayout(info_layout, 1)
 
+        # 文件大小
+        size = self.record.get('file_size', 0)
+        self.size_label = QLabel(format_size(size) if size > 0 else '')
+        self.size_label.setObjectName('MonoLabel')
+        layout.addWidget(self.size_label)
+
+        # 操作按钮（悬停才显示）
         save_path = self.record.get('save_path', '')
+        self._action_widget = QWidget()
+        action_layout = QHBoxLayout(self._action_widget)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(2)
+
         if status == 'completed' and save_path and os.path.exists(save_path):
             btn_open = QPushButton()
-            btn_open.setFixedSize(30, 26)
+            btn_open.setObjectName('HistoryActionBtn')
+            btn_open.setFixedSize(28, 28)
             btn_open.setIcon(self._make_play_icon())
-            btn_open.setIconSize(btn_open.size() * 0.6)
+            btn_open.setIconSize(btn_open.size() * 0.5)
             btn_open.setToolTip('打开文件')
             btn_open.clicked.connect(lambda: os.startfile(save_path))
-            row3.addWidget(btn_open)
+            action_layout.addWidget(btn_open)
 
             btn_folder = QPushButton()
-            btn_folder.setFixedSize(30, 26)
+            btn_folder.setObjectName('HistoryActionBtn')
+            btn_folder.setFixedSize(28, 28)
             btn_folder.setIcon(self._make_folder_icon())
-            btn_folder.setIconSize(btn_folder.size() * 0.6)
+            btn_folder.setIconSize(btn_folder.size() * 0.5)
             btn_folder.setToolTip('打开所在文件夹')
             btn_folder.clicked.connect(lambda: subprocess.Popen(f'explorer /select,"{save_path}"'))
-            row3.addWidget(btn_folder)
+            action_layout.addWidget(btn_folder)
 
-            # 检查是否是视频文件
             from config import VIDEO_EXTENSIONS
             ext = os.path.splitext(save_path)[1].lower()
             if ext in VIDEO_EXTENSIONS:
                 btn_play = QPushButton()
-                btn_play.setFixedSize(30, 26)
+                btn_play.setObjectName('HistoryActionBtn')
+                btn_play.setFixedSize(28, 28)
                 btn_play.setIcon(self._make_play_icon())
-                btn_play.setIconSize(btn_play.size() * 0.6)
+                btn_play.setIconSize(btn_play.size() * 0.5)
                 btn_play.setToolTip('在播放器播放')
                 btn_play.clicked.connect(lambda: signal_bus.play_video.emit(save_path))
-                row3.addWidget(btn_play)
+                action_layout.addWidget(btn_play)
 
         btn_delete = QPushButton()
-        btn_delete.setFixedSize(30, 26)
+        btn_delete.setObjectName('HistoryActionBtn')
+        btn_delete.setFlat(True)
+        btn_delete.setFixedSize(28, 28)
         btn_delete.setIcon(self._make_delete_icon())
-        btn_delete.setIconSize(btn_delete.size() * 0.6)
+        btn_delete.setIconSize(btn_delete.size() * 0.5)
         btn_delete.setToolTip('删除此记录')
         btn_delete.clicked.connect(self._delete_record)
-        row3.addWidget(btn_delete)
+        action_layout.addWidget(btn_delete)
 
-        layout.addLayout(row3)
+        # 初始隐藏，hover时显示
+        self._action_widget.hide()
+        layout.addWidget(self._action_widget)
+
+    def enterEvent(self, event):
+        """鼠标进入时显示操作按钮"""
+        if self._action_widget:
+            self._action_widget.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """鼠标离开时隐藏操作按钮"""
+        if self._action_widget:
+            self._action_widget.hide()
+        super().leaveEvent(event)
 
     # === 图标绘制 ===
 
@@ -201,36 +232,20 @@ class HistoryTab(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
-        # 搜索框
+        # 顶部工具栏行
         top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        # 搜索框（带占位图标）
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText('🔍 搜索下载记录...')
+        self.search_input.setPlaceholderText('搜索文件名...')
         self.search_input.textChanged.connect(self._on_search)
+        self.search_input.setMaximumWidth(360)
         top_row.addWidget(self.search_input)
 
-        btn_refresh = QPushButton('刷新')
-        btn_refresh.setFixedWidth(60)
-        btn_refresh.clicked.connect(self.refresh)
-        top_row.addWidget(btn_refresh)
-
-        btn_export = QPushButton('导出 CSV')
-        btn_export.setFixedWidth(80)
-        btn_export.clicked.connect(self._export_csv)
-        top_row.addWidget(btn_export)
-
-        btn_clear = QPushButton('清空历史')
-        btn_clear.setFixedWidth(80)
-        btn_clear.setObjectName('DangerBtn')
-        btn_clear.clicked.connect(self._clear_all)
-        top_row.addWidget(btn_clear)
-        layout.addLayout(top_row)
-
-        # 过滤器按钮组
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
-
+        # 过滤器药丸按钮
         self._filter_btns = {}
         filters = [
             ('all', '全部'),
@@ -241,30 +256,46 @@ class HistoryTab(QWidget):
             btn = QPushButton(label)
             btn.setObjectName('FilterChip')
             btn.setCheckable(True)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(28)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, k=key: self._set_filter(k))
             self._filter_btns[key] = btn
-            filter_row.addWidget(btn)
+            top_row.addWidget(btn)
 
-        # 默认选中"全部"
         self._filter_btns['all'].setChecked(True)
 
-        filter_row.addStretch()
-        layout.addLayout(filter_row)
+        top_row.addStretch()
+
+        btn_refresh = QPushButton('刷新')
+        btn_refresh.setObjectName('SmallBtn')
+        btn_refresh.setFixedWidth(56)
+        btn_refresh.clicked.connect(self.refresh)
+        top_row.addWidget(btn_refresh)
+
+        btn_export = QPushButton('导出 CSV')
+        btn_export.setObjectName('SmallBtn')
+        btn_export.setFixedWidth(72)
+        btn_export.clicked.connect(self._export_csv)
+        top_row.addWidget(btn_export)
+
+        btn_clear = QPushButton('清空')
+        btn_clear.setObjectName('DangerBtn')
+        btn_clear.setFixedWidth(56)
+        btn_clear.clicked.connect(self._clear_all)
+        top_row.addWidget(btn_clear)
+        layout.addLayout(top_row)
 
         # 历史列表
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # 滚动触底加载下一页
         scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self._scroll_area = scroll
 
         self._list_widget = QWidget()
         self._list_layout = QVBoxLayout(self._list_widget)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(8)
+        self._list_layout.setSpacing(2)
         self._list_layout.addStretch()
 
         scroll.setWidget(self._list_widget)
@@ -272,11 +303,9 @@ class HistoryTab(QWidget):
 
         # 空状态提示
         self.empty_label = QLabel('暂无下载历史')
-        self.empty_label.setObjectName('EmptyLabel')
+        self.empty_label.setObjectName('EmptyState')
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.empty_label)
-
-        self._update_filter_style()
 
     def _set_filter(self, filter_key: str):
         """切换过滤器"""

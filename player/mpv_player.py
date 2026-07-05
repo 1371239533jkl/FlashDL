@@ -393,15 +393,22 @@ class MpvPlayer(QObject):
     def get_chapters(self) -> list:
         """获取章节列表 [{index, title, time_ms}]"""
         try:
-            count = self._mpv.chapter_list_count or 0
+            # 使用 mpv 原生命令获取章节数
+            count = self._mpv.command('get_property', 'chapter-list/count')
+            if not count or count <= 0:
+                return []
             chapters = []
             for i in range(count):
-                ch = self._mpv.chapter_list[i] or {}
-                chapters.append({
-                    'index': i,
-                    'title': ch.get('title', f'章节 {i + 1}'),
-                    'time_ms': int(ch.get('time', 0) * 1000),
-                })
+                try:
+                    title = self._mpv.command('get_property', f'chapter-list/{i}/title') or f'章节 {i + 1}'
+                    time_sec = self._mpv.command('get_property', f'chapter-list/{i}/time') or 0
+                    chapters.append({
+                        'index': i,
+                        'title': title,
+                        'time_ms': int(float(time_sec) * 1000),
+                    })
+                except Exception:
+                    continue
             return chapters
         except Exception:
             return []
@@ -416,7 +423,7 @@ class MpvPlayer(QObject):
 
     def seek_to_chapter(self, index: int):
         """跳转到指定章节"""
-        self._mpv.command('set', 'chapter', index)
+        self._mpv.chapter = index
 
     # ── 画面调整：亮度 / 对比度 / 饱和度 / 伽马 ──────────────
 
