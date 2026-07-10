@@ -22,10 +22,6 @@ class PlaylistManager:
         return list(self._items)
 
     @property
-    def items(self) -> list[str]:
-        return list(self._items)
-
-    @property
     def current_index(self) -> int:
         return self._current_index
 
@@ -56,6 +52,18 @@ class PlaylistManager:
             self._items.pop(index)
             if index <= self._current_index:
                 self._current_index = max(-1, self._current_index - 1)
+
+    def move_file(self, from_index: int, to_index: int):
+        """移动文件位置（拖拽排序）"""
+        if 0 <= from_index < len(self._items) and 0 <= to_index < len(self._items):
+            item = self._items.pop(from_index)
+            self._items.insert(to_index, item)
+            if self._current_index == from_index:
+                self._current_index = to_index
+            elif from_index < self._current_index <= to_index:
+                self._current_index -= 1
+            elif to_index <= self._current_index < from_index:
+                self._current_index += 1
 
     def clear(self):
         self._items.clear()
@@ -91,11 +99,11 @@ class PlaylistManager:
     def save(self):
         """保存播放列表到文件"""
         try:
-            data = {'items': self._items[:20], 'current_index': self._current_index}  # 只保留最近20个
+            data = {'items': self._items[:20], 'current_index': self._current_index}
             os.makedirs(os.path.dirname(self.PLAYLIST_FILE), exist_ok=True)
             with open(self.PLAYLIST_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
     def load(self):
@@ -106,7 +114,6 @@ class PlaylistManager:
             with open(self.PLAYLIST_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             items = data.get('items', [])
-            # 只保留仍存在的视频文件
             video_extensions = {'.mp4','.mkv','.avi','.mov','.wmv','.flv','.webm','.m4v'}
             self._items = [
                 p for p in items
@@ -114,5 +121,5 @@ class PlaylistManager:
             ]
             idx = data.get('current_index', -1)
             self._current_index = idx if 0 <= idx < len(self._items) else -1
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError):
             pass

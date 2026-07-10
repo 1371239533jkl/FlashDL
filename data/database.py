@@ -37,6 +37,7 @@ class Database:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA journal_mode=WAL')  # 读写并发性能提升
         return conn
 
     def add_record(self, task_id: str, url: str, file_name: str,

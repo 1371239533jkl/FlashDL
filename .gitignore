@@ -12,8 +12,12 @@ build/
 .qoder/
 .vscode/
 .idea/
+.codebuddy/
 *.swp
 *.swo
+
+# 误入仓库的系统文件
+NVIDIA Corporation/
 
 # 临时下载文件（运行时生成）
 temp/

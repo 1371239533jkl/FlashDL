@@ -100,11 +100,15 @@ def get_tokens(theme: str = None) -> DesignTokens:
     return DARK if theme == 'dark' else LIGHT
 
 
+_stylesheet_cache: dict = {}
+
 def get_stylesheet(theme: str = None) -> str:
-    """返回全局 QSS 样式表"""
+    """返回全局 QSS 样式表（带缓存避免主题切换时重复构建）"""
     if theme is None:
         theme = _current_theme
-    return _build_stylesheet(theme)
+    if theme not in _stylesheet_cache:
+        _stylesheet_cache[theme] = _build_stylesheet(theme)
+    return _stylesheet_cache[theme]
 
 
 def _build_stylesheet(theme: str) -> str:
@@ -714,11 +718,7 @@ def _build_stylesheet(theme: str) -> str:
         color: {t.text_secondary};
         background: transparent;
     }}
-    #EmptyStateHint {{
-        font-size: 12px;
-        color: {t.text_muted};
-        background: transparent;
-    }}
+    
 
     /* ── 倍速标签 ── */
     #SpeedBadge {{
@@ -861,22 +861,6 @@ def _build_stylesheet(theme: str) -> str:
     }}
     #StatusInfo {{
         color: {t.accent};
-    }}
-
-    /* ── 通用工具栏 ── */
-    #Toolbar {{
-        background-color: {t.bg_elevated};
-        border: 1px solid {t.border_subtle};
-        border-radius: 6px;
-        padding: 8px 14px;
-    }}
-
-    /* ── 通用状态栏 ── */
-    #StatusBar {{
-        background-color: {t.bg_elevated};
-        border: 1px solid {t.border_subtle};
-        border-radius: 6px;
-        padding: 8px 14px;
     }}
 
     /* ── 空状态 ── */

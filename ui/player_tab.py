@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""视频播放器标签页 - 视频显示区域、播放控制条、播放列表"""
+"""视频播放器标签页 - 视频显示区域、播放控制条、播放列表 - TEST"""
 
 import os
 from PyQt6.QtCore import Qt, QTimer, QEvent, QPoint
@@ -104,9 +104,9 @@ class PlayerTab(QWidget):
         # ======== 第一行：进度条 + 时间 ========
         seek_row = QHBoxLayout()
         seek_row.setSpacing(8)
-        self.time_current = QLabel('00:00')
+        self.time_current = QLabel('00:00:00')
         self.time_current.setObjectName('MonoLabel')
-        self.time_current.setFixedWidth(40)
+        self.time_current.setFixedWidth(65)
         seek_row.addWidget(self.time_current)
 
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
@@ -116,9 +116,9 @@ class PlayerTab(QWidget):
         self.seek_slider.sliderMoved.connect(self._on_seek_moved)
         seek_row.addWidget(self.seek_slider)
 
-        self.time_total = QLabel('00:00')
+        self.time_total = QLabel('00:00:00')
         self.time_total.setObjectName('MonoLabel')
-        self.time_total.setFixedWidth(40)
+        self.time_total.setFixedWidth(65)
         self.time_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         seek_row.addWidget(self.time_total)
         controls_layout.addLayout(seek_row)
@@ -652,21 +652,26 @@ class PlayerTab(QWidget):
             self._clear_playlist()
 
     def _on_playlist_reordered(self):
-        """拖拽排序后同步 PlaylistManager 的内部列表"""
+        """拖拽排序后同步 PlaylistManager 的内部列表并保存"""
         new_items = []
+        current_path = self.playlist.current_file
         for i in range(self.playlist_widget.count()):
             path = self.playlist_widget.item(i).data(Qt.ItemDataRole.UserRole)
             if path:
                 new_items.append(path)
 
-        if len(new_items) != len(self.playlist._items):
+        if sorted(new_items) != sorted(self.playlist._items):
             return  # 数据不完整，跳过
 
-        current_path = self.playlist.current_file
         self.playlist._items.clear()
         self.playlist._items.extend(new_items)
-        if current_path in new_items:
+        if current_path and current_path in new_items:
             self.playlist._current_index = new_items.index(current_path)
+        else:
+            self.playlist._current_index = -1
+
+        self.playlist.save()
+        self._refresh_playlist_ui()
 
     def _refresh_playlist_ui(self):
         self.playlist.save()
@@ -981,10 +986,6 @@ class PlayerTab(QWidget):
         if subtitle_path:
             self._load_subtitle(subtitle_path)
 
-    def _update_subtitle(self, position_ms: int):
-        """字幕由 mpv 原生 libass 渲染，无需手动更新"""
-        pass
-
     # === 字幕延迟调节 ===
 
     def _adjust_subtitle_offset(self, delta_ms: int):
@@ -1000,7 +1001,6 @@ class PlayerTab(QWidget):
         """截取当前视频帧"""
         if not self.player.current_file:
             return
-        import time as _time
         video_path = self.player.current_file
         video_dir = os.path.dirname(video_path)
         video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -1146,8 +1146,8 @@ class _FullscreenControlsOverlay(QWidget):
 
         # 进度条行
         seek_row = QHBoxLayout()
-        self._time_current = QLabel('00:00')
-        self._time_current.setFixedWidth(50)
+        self._time_current = QLabel('00:00:00')
+        self._time_current.setFixedWidth(75)
         seek_row.addWidget(self._time_current)
 
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1157,8 +1157,8 @@ class _FullscreenControlsOverlay(QWidget):
         self._seek_slider.sliderMoved.connect(self._on_seek_moved)
         seek_row.addWidget(self._seek_slider)
 
-        self._time_total = QLabel('00:00')
-        self._time_total.setFixedWidth(50)
+        self._time_total = QLabel('00:00:00')
+        self._time_total.setFixedWidth(75)
         self._time_total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         seek_row.addWidget(self._time_total)
         main_layout.addLayout(seek_row)
@@ -1288,6 +1288,7 @@ class _FullscreenControlsOverlay(QWidget):
     def _on_seek_end(self):
         self._is_seeking = False
         self._player_tab.player.seek(self._seek_slider.value())
+        self._player_tab._save_playback_progress()
 
     def _on_seek_moved(self, value):
         self._time_current.setText(format_time_ms(value))
@@ -1378,6 +1379,15 @@ class _VideoInfoOverlay(QWidget):
     def _label_style(self) -> str:
         return 'color: rgba(255,255,255,200); font-size: 13px; background: transparent;'
 
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        if h > 0:
+            return f'{h}:{m:02d}:{s:02d}'
+        return f'{m}:{s:02d}'
+
     def _format_info_line(self, label: str, value) -> str:
         if value:
             return f'{label}: {value}'
@@ -1397,12 +1407,17 @@ class _VideoInfoOverlay(QWidget):
         file_path = self._player_tab.player.current_file or ''
         # 用位置和当前文件做快照，无变化时跳过重建避免闪烁
         position = self._player_tab.player.position
+        # ponytail: duration 不入 snapshot，因为它可能在视频加载后才从 0→真实值
         snapshot = (file_path, position,
                     info.get('resolution', ''), info.get('codec', ''),
-                    info.get('fps', ''), info.get('bitrate', ''))
-        if snapshot == getattr(self, '_last_snapshot', None):
+                    info.get('fps', ''), info.get('bitrate', ''),
+                    info.get('chapters', 0))
+        same_snapshot = snapshot == getattr(self, '_last_snapshot', None)
+        dur_changed = info.get('duration', 0) != getattr(self, '_last_duration', 0)
+        if same_snapshot and not dur_changed:
             return
         self._last_snapshot = snapshot
+        self._last_duration = info.get('duration', 0)
 
         while self._info_lines.count():
             item = self._info_lines.takeAt(0)
@@ -1410,16 +1425,35 @@ class _VideoInfoOverlay(QWidget):
                 item.widget().deleteLater()
 
         if file_path:
-            import os
-            label = QLabel(f'文件: {os.path.basename(file_path)}')
-            label.setStyleSheet(self._label_style())
-            self._info_lines.addWidget(label)
+            lbl = QLabel(f'文件: {os.path.basename(file_path)}')
+            lbl.setStyleSheet(self._label_style())
+            self._info_lines.addWidget(lbl)
+            # 文件大小
+            if os.path.exists(file_path):
+                size = os.path.getsize(file_path)
+                from utils.format_utils import format_size
+                lbl = QLabel(f'大小: {format_size(size)}')
+                lbl.setStyleSheet(self._label_style())
+                self._info_lines.addWidget(lbl)
+
+        # 时长
+        dur = info.get('duration', 0)
+        dur_text = self._format_duration(dur) if dur else '--'
+        lbl = QLabel(f'时长: {dur_text}')
+        lbl.setStyleSheet(self._label_style())
+        self._info_lines.addWidget(lbl)
 
         for label, key in [('分辨率', 'resolution'), ('编码', 'codec'),
                            ('FPS', 'fps'), ('码率', 'bitrate')]:
             val = info.get(key, '')
             text = self._format_info_line(label, val)
             lbl = QLabel(text)
+            lbl.setStyleSheet(self._label_style())
+            self._info_lines.addWidget(lbl)
+
+        chapters = info.get('chapters', 0)
+        if chapters:
+            lbl = QLabel(f'章节: {chapters} 个')
             lbl.setStyleSheet(self._label_style())
             self._info_lines.addWidget(lbl)
 

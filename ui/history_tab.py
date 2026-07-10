@@ -2,8 +2,6 @@
 """历史记录标签页 - 显示下载历史、搜索过滤、操作"""
 
 import os
-import subprocess
-import time
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QIcon
 from PyQt6.QtWidgets import (
@@ -12,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from data.database import Database
-from utils.format_utils import format_size
+from utils.format_utils import format_size, safe_open_file, safe_open_folder
 from utils.signal_bus import signal_bus
 
 
@@ -85,7 +83,7 @@ class HistoryCard(QFrame):
             btn_open.setIcon(self._make_play_icon())
             btn_open.setIconSize(btn_open.size() * 0.5)
             btn_open.setToolTip('打开文件')
-            btn_open.clicked.connect(lambda: os.startfile(save_path))
+            btn_open.clicked.connect(lambda p=save_path: safe_open_file(p))
             action_layout.addWidget(btn_open)
 
             btn_folder = QPushButton()
@@ -94,7 +92,7 @@ class HistoryCard(QFrame):
             btn_folder.setIcon(self._make_folder_icon())
             btn_folder.setIconSize(btn_folder.size() * 0.5)
             btn_folder.setToolTip('打开所在文件夹')
-            btn_folder.clicked.connect(lambda: subprocess.Popen(f'explorer /select,"{save_path}"'))
+            btn_folder.clicked.connect(lambda p=save_path: safe_open_folder(p))
             action_layout.addWidget(btn_folder)
 
             from config import VIDEO_EXTENSIONS
