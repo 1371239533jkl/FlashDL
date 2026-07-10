@@ -195,6 +195,37 @@ class DownloadManager(QObject):
             except Exception:
                 pass
 
+        # 检查是否需要执行下载完成后操作
+        self._check_completion_action()
+
+    def _check_completion_action(self):
+        """所有活跃任务完成后执行用户设置的操作"""
+        active = sum(1 for t in self._tasks.values()
+                     if t.status in ('downloading', 'resolving_metadata', 'waiting'))
+        if active > 0:
+            return
+
+        from utils.settings import get as get_setting
+        action = get_setting('completion_action', 'none')
+        if action == 'none':
+            return
+
+        import subprocess
+        try:
+            if action == 'shutdown':
+                subprocess.Popen(['shutdown', '/s', '/t', '60'],
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+                signal_bus.show_notification.emit(
+                    '自动关机', '所有任务已完成，60 秒后关机')
+            elif action == 'hibernate':
+                subprocess.Popen(['shutdown', '/h'],
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            elif action == 'open_folder':
+                download_dir = get_setting('download_dir', config.DEFAULT_DOWNLOAD_DIR)
+                os.startfile(download_dir)
+        except Exception:
+            pass
+
     def _on_failed(self, task_id: str, error: str):
         signal_bus.task_failed.emit(task_id, error)
 

@@ -100,6 +100,20 @@ class SettingsDialog(QDialog):
         form.addRow('下载重试次数:', self.max_retries)
 
         layout.addWidget(dl_group)
+
+        # 下载完成后操作
+        actions_group = QGroupBox('下载完成后')
+        actions_form = QFormLayout(actions_group)
+        actions_form.setSpacing(10)
+
+        self.completion_action = QComboBox()
+        self.completion_action.addItem('无操作', 'none')
+        self.completion_action.addItem('关机', 'shutdown')
+        self.completion_action.addItem('休眠', 'hibernate')
+        self.completion_action.addItem('打开下载目录', 'open_folder')
+        actions_form.addRow('自动操作:', self.completion_action)
+
+        layout.addWidget(actions_group)
         layout.addStretch()
         return tab
 
@@ -211,6 +225,10 @@ class SettingsDialog(QDialog):
         self.default_volume.setValue(get_setting('default_volume', config.DEFAULT_VOLUME))
         self.auto_load_subtitle.setChecked(get_setting('subtitle_auto_load', config.SUBTITLE_AUTO_LOAD))
 
+        # 下载完成后操作
+        action = get_setting('completion_action', 'none')
+        self._set_combo_value(self.completion_action, action)
+
         # 通用
         self.clipboard_monitor.setChecked(get_setting('clipboard_monitor', True))
         self.completion_sound.setChecked(get_setting('completion_sound', True))
@@ -235,6 +253,9 @@ class SettingsDialog(QDialog):
         # 播放器
         set_setting('default_volume', self.default_volume.value())
         set_setting('subtitle_auto_load', self.auto_load_subtitle.isChecked())
+
+        # 下载完成后操作
+        set_setting('completion_action', self.completion_action.currentData())
 
         # 通用
         set_setting('clipboard_monitor', self.clipboard_monitor.isChecked())

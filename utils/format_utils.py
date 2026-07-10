@@ -61,8 +61,39 @@ def shorten_path(path: str, max_len: int = 200) -> str:
         return path
     directory = os.path.dirname(path)
     filename = os.path.basename(path)
-    # 保留文件名的前 max_len//4 和后 max_len//4 字符
     half = (max_len - 3) // 2
     if len(directory) > half:
         directory = directory[:half] + '...' + directory[-half:]
     return os.path.join(directory, filename)
+
+
+def safe_open_file(file_path: str) -> bool:
+    """安全打开文件/文件夹：校验路径存在且无注入风险后调用系统关联程序"""
+    if not file_path or not isinstance(file_path, str):
+        return False
+    if not os.path.exists(file_path):
+        return False
+    # 阻止包含 shell 元字符的可疑路径
+    dangerous = {'&&', '||', '|', ';', '$', '`', '>', '<', '&'}
+    if any(c in file_path for c in dangerous):
+        return False
+    try:
+        os.startfile(file_path)
+        return True
+    except Exception:
+        return False
+
+
+def safe_open_folder(file_path: str) -> bool:
+    """安全打开文件所在文件夹"""
+    if not file_path or not os.path.exists(file_path):
+        return False
+    dangerous = {'&&', '||', '|', ';', '$', '`', '>', '<', '&'}
+    if any(c in file_path for c in dangerous):
+        return False
+    try:
+        import subprocess
+        subprocess.Popen(f'explorer /select,"{os.path.normpath(file_path)}"')
+        return True
+    except Exception:
+        return False

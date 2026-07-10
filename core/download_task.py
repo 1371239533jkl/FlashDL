@@ -6,11 +6,11 @@ import os
 import sys
 import time
 import uuid
-from collections import deque
 from pathlib import Path
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 
 import config
+from core.base_task import BaseDownloadTask
 from core.download_worker import DownloadWorker
 from core.url_validator import validate_url
 from utils.format_utils import ensure_long_path
@@ -20,7 +20,7 @@ from utils.logger import get_logger
 _log = get_logger('download_task')
 
 
-class DownloadTask(QObject):
+class DownloadTask(BaseDownloadTask):
     """单个下载任务，协调多个DownloadWorker完成分块下载
 
     架构：直接写入输出文件，跳过临时文件和合并阶段。
@@ -30,85 +30,28 @@ class DownloadTask(QObject):
     """
 
     # 信号
-    progress_updated = pyqtSignal(str, dict)    # (task_id, progress_info)
-    status_changed = pyqtSignal(str, str)       # (task_id, new_status)
-    completed = pyqtSignal(str, str)            # (task_id, file_path)
-    failed = pyqtSignal(str, str)               # (task_id, error)
+    progress_updated = pyqtSignal(str, dict)
+    status_changed = pyqtSignal(str, str)
+    completed = pyqtSignal(str, str)
+    failed = pyqtSignal(str, str)
 
-    # 任务状态常量
-    WAITING = 'waiting'
-    DOWNLOADING = 'downloading'
-    PAUSED = 'paused'
-    MERGING = 'merging'       # 保留常量兼容旧代码，不再实际执行合并
-    COMPLETED = 'completed'
-    FAILED = 'failed'
-
-    # 边下边播最低进度阈值（百分制）
     STREAM_PLAY_MIN_PROGRESS = 5
 
     def __init__(self, url: str, save_dir: str, file_name: str = '',
                  thread_count: int = config.DEFAULT_THREAD_COUNT,
                  task_id: str = None, headers: dict = None):
-        super().__init__()
-        self.task_id = task_id or str(uuid.uuid4())[:8]
-        self.url = url
-        self.save_dir = ensure_long_path(save_dir)
-        self.file_name = file_name
+        super().__init__(url, ensure_long_path(save_dir), file_name, task_id)
         self.thread_count = thread_count
         self.headers = headers or {}
-        self.total_size = -1
-        self.downloaded_size = 0
         self.supports_range = False
-        self.status = self.WAITING
-        self.error_message = ''
-        self.created_time = time.strftime('%Y-%m-%d %H:%M:%S')
 
-        self.chunks = []           # 分块信息列表（无 temp_file）
-        self._workers = []         # 工作线程列表
-        self._speed_samples = deque(maxlen=config.SPEED_WINDOW_SIZE)
-        self._last_sample_size = 0
-        self._last_sample_time = 0
+        self.chunks = []
+        self._workers = []
 
-        # 进度更新定时器
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_progress)
 
-        # 状态持久化目录（仅存 task.json，不存临时文件）
         self._state_dir = ensure_long_path(os.path.join(config.TEMP_DIR, self.task_id))
-
-    @property
-    def save_path(self) -> str:
-        return os.path.join(self.save_dir, self.file_name)
-
-    @property
-    def progress(self) -> float:
-        if self.total_size <= 0:
-            return 0.0
-        return min(self.downloaded_size / self.total_size * 100, 100.0)
-
-    @property
-    def streamable(self) -> bool:
-        """是否可边下边播（下载中或暂停均可）"""
-        return (self.status in (self.DOWNLOADING, self.PAUSED)
-                and self.total_size > 0
-                and self.supports_range
-                and self.progress >= self.STREAM_PLAY_MIN_PROGRESS
-                and os.path.exists(self.save_path))
-
-    def get_info(self) -> dict:
-        """获取任务当前完整信息"""
-        return {
-            'task_id': self.task_id,
-            'url': self.url,
-            'file_name': self.file_name,
-            'save_dir': self.save_dir,
-            'total_size': self.total_size,
-            'downloaded_size': self.downloaded_size,
-            'thread_count': self.thread_count,
-            'status': self.status,
-            'progress': self.progress,
-            'created_time': self.created_time,
-        }
 
     def prepare(self) -> bool:
         """
@@ -187,8 +130,8 @@ class DownloadTask(QObject):
             return
         self._set_status(self.DOWNLOADING)
         self._last_sample_size = self.downloaded_size
-        self._last_sample_time = time.time()
-        self._speed_samples.clear()
+        self._speed_clear()
+
 
         # 检查是否有已停止的worker需要重新启动
         active_workers = [w for w in self._workers if w.isRunning()]
@@ -204,7 +147,7 @@ class DownloadTask(QObject):
         self._timer.stop()
         self._stop_workers()
         # 清理状态文件，但保留输出文件（用户可手动删除）
-        self._cleanup_state()
+        self._cleanup_state_dir(self._state_dir)
         self._set_status(self.FAILED)
 
     def retry(self) -> bool:
@@ -322,7 +265,7 @@ class DownloadTask(QObject):
             self._timer.stop()
             self._stop_workers()
             # 直接标记完成（无需合并）
-            self._cleanup_state()
+            self._cleanup_state_dir(self._state_dir)
             self._set_status(self.COMPLETED)
             self.completed.emit(self.task_id, self.save_path)
 
@@ -342,40 +285,10 @@ class DownloadTask(QObject):
             self.failed.emit(self.task_id, error)
 
     def _update_progress(self):
-        """定时更新进度信息并发送信号"""
-        now = time.time()
-        elapsed = now - self._last_sample_time
-        if elapsed >= config.SPEED_SAMPLE_INTERVAL:
-            bytes_delta = self.downloaded_size - self._last_sample_size
-            speed = bytes_delta / elapsed if elapsed > 0 else 0
-            self._speed_samples.append(speed)
-            self._last_sample_size = self.downloaded_size
-            self._last_sample_time = now
-
-        # 计算平均速度
-        avg_speed = sum(self._speed_samples) / len(self._speed_samples) if self._speed_samples else 0
-        remaining = (self.total_size - self.downloaded_size) / avg_speed if avg_speed > 0 and self.total_size > 0 else float('inf')
-
-        progress_info = {
-            'task_id': self.task_id,
-            'downloaded_size': self.downloaded_size,
-            'total_size': self.total_size,
-            'progress': self.progress,
-            'speed': avg_speed,
-            'speed_text': format_speed(avg_speed),
-            'remaining_time': format_time(remaining),
-            'downloaded_text': format_size(self.downloaded_size),
-            'total_text': format_size(self.total_size) if self.total_size > 0 else '未知',
-            'status': self.status,
-        }
-        self.progress_updated.emit(self.task_id, progress_info)
-
-    def _set_status(self, status: str):
-        self.status = status
-        self.status_changed.emit(self.task_id, status)
+        avg_speed = self._sample_speed()
+        self._emit_progress(avg_speed)
 
     def _save_state(self):
-        """保存任务状态到JSON文件(原子写入)"""
         state = {
             'task_type': 'http',
             'task_id': self.task_id,
@@ -390,17 +303,7 @@ class DownloadTask(QObject):
             'created_time': self.created_time,
             'chunks': self.chunks,
         }
-        os.makedirs(self._state_dir, exist_ok=True)
-        tmp_path = os.path.join(self._state_dir, 'task.json.tmp')
-        final_path = os.path.join(self._state_dir, 'task.json')
-        try:
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(tmp_path, final_path)
-        except Exception as e:
-            _log.warning(f'任务状态保存失败: {self.task_id} - {e}')
+        self._atomic_json_write(state, self._state_dir)
 
     @classmethod
     def load_from_state(cls, task_dir: str) -> 'DownloadTask':
@@ -445,10 +348,5 @@ class DownloadTask(QObject):
         return task
 
     def _cleanup_state(self):
-        """清理状态文件目录"""
-        import shutil
-        try:
-            if os.path.exists(self._state_dir):
-                shutil.rmtree(self._state_dir)
-        except Exception:
-            pass
+        """清理状态文件目录（委托基类）"""
+        self._cleanup_state_dir(self._state_dir)

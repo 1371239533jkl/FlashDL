@@ -6,10 +6,10 @@ import json
 import os
 import time
 import uuid
-from collections import deque
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 
 import config
+from core.base_task import BaseDownloadTask
 from core.magnet_session_manager import MagnetSessionManager, is_libtorrent_available
 from core.url_validator import validate_url
 from utils.format_utils import format_size, format_speed, format_time, ensure_long_path
@@ -21,85 +21,31 @@ if is_libtorrent_available():
     import libtorrent as lt
 
 
-class MagnetDownloadTask(QObject):
+class MagnetDownloadTask(BaseDownloadTask):
     """磁力链接下载任务，与 DownloadTask 具有相同的信号接口"""
 
-    # 信号(与 DownloadTask 完全一致)
-    progress_updated = pyqtSignal(str, dict)    # (task_id, progress_info)
-    status_changed = pyqtSignal(str, str)       # (task_id, new_status)
-    completed = pyqtSignal(str, str)            # (task_id, file_path)
-    failed = pyqtSignal(str, str)               # (task_id, error)
+    progress_updated = pyqtSignal(str, dict)
+    status_changed = pyqtSignal(str, str)
+    completed = pyqtSignal(str, str)
+    failed = pyqtSignal(str, str)
 
-    # 任务状态常量(兼容 DownloadTask + 新增元数据解析状态)
-    WAITING = 'waiting'
     RESOLVING_METADATA = 'resolving_metadata'
-    DOWNLOADING = 'downloading'
-    PAUSED = 'paused'
-    COMPLETED = 'completed'
-    FAILED = 'failed'
 
     def __init__(self, url: str, save_dir: str, file_name: str = '',
                  task_id: str = None):
-        super().__init__()
-        self.task_id = task_id or str(uuid.uuid4())[:8]
-        self.url = url
-        self.save_dir = ensure_long_path(save_dir)
-        self.file_name = file_name
-        self.total_size = -1
-        self.downloaded_size = 0
-        self.thread_count = 0  # BT下载不使用线程数概念，但保持接口兼容
-        self.status = self.WAITING
-        self.error_message = ''
-        self.created_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        super().__init__(url, ensure_long_path(save_dir), file_name, task_id)
+        self.thread_count = 0  # 保持接口兼容
 
-        self._handle = None  # libtorrent torrent_handle
+        self._handle = None
         self._session_mgr = MagnetSessionManager.get_instance()
         self._metadata_resolved = False
         self._metadata_start_time = 0
-        self._speed_samples = deque(maxlen=config.SPEED_WINDOW_SIZE)
-        self._last_sample_size = 0
-        self._last_sample_time = 0
-        self._handle_invalid_count = 0  # handle 连续失效次数
+        self._handle_invalid_count = 0
 
-        # 进度轮询定时器
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_progress)
 
-        # 任务临时目录
         self._temp_dir = ensure_long_path(os.path.join(config.MAGNET_TEMP_DIR, self.task_id))
-
-    @property
-    def save_path(self) -> str:
-        return os.path.join(self.save_dir, self.file_name)
-
-    @property
-    def progress(self) -> float:
-        if self.total_size <= 0:
-            return 0.0
-        return min(self.downloaded_size / self.total_size * 100, 100.0)
-
-    @property
-    def streamable(self) -> bool:
-        """是否可边下边播（下载中或暂停均可）"""
-        return (self.status in (self.DOWNLOADING, self.PAUSED)
-                and self.total_size > 0
-                and self.progress >= 5     # 最低 5%
-                and os.path.exists(self.save_path))
-
-    def get_info(self) -> dict:
-        """获取任务当前完整信息(与 DownloadTask.get_info 格式一致)"""
-        return {
-            'task_id': self.task_id,
-            'url': self.url,
-            'file_name': self.file_name,
-            'save_dir': self.save_dir,
-            'total_size': self.total_size,
-            'downloaded_size': self.downloaded_size,
-            'thread_count': self.thread_count,
-            'status': self.status,
-            'progress': self.progress,
-            'created_time': self.created_time,
-        }
 
     def prepare(self) -> bool:
         """准备下载: 验证磁力链接、添加到 session"""
@@ -169,9 +115,7 @@ class MagnetDownloadTask(QObject):
             self._set_status(self.RESOLVING_METADATA)
             self._metadata_start_time = time.time()
 
-        self._last_sample_size = self.downloaded_size
-        self._last_sample_time = time.time()
-        self._speed_samples.clear()
+        self._speed_clear()
         self._timer.start(config.BT_POLL_INTERVAL)
 
     def cancel(self):
@@ -243,34 +187,12 @@ class MagnetDownloadTask(QObject):
         self.downloaded_size = status.total_done
         self.total_size = status.total_wanted if status.total_wanted > 0 else self.total_size
 
-        # 速度采样
-        now = time.time()
-        elapsed = now - self._last_sample_time
-        if elapsed >= config.SPEED_SAMPLE_INTERVAL:
-            bytes_delta = self.downloaded_size - self._last_sample_size
-            speed = bytes_delta / elapsed if elapsed > 0 else 0
-            self._speed_samples.append(speed)
-            self._last_sample_size = self.downloaded_size
-            self._last_sample_time = now
-
+        self._sample_speed()  # 仅用于采样记录，不改变 avg_speed
         avg_speed = sum(self._speed_samples) / len(self._speed_samples) if self._speed_samples else 0
-        remaining = (self.total_size - self.downloaded_size) / avg_speed if avg_speed > 0 and self.total_size > 0 else float('inf')
 
-        progress_info = {
-            'task_id': self.task_id,
-            'downloaded_size': self.downloaded_size,
-            'total_size': self.total_size,
-            'progress': self.progress,
-            'speed': status.download_rate,
-            'speed_text': format_speed(status.download_rate),
-            'remaining_time': format_time(remaining),
-            'downloaded_text': format_size(self.downloaded_size),
-            'total_text': format_size(self.total_size) if self.total_size > 0 else '未知',
-            'peer_count': status.num_peers,
-            'seed_count': status.num_seeds,
-            'status': self.status,
-        }
-        self.progress_updated.emit(self.task_id, progress_info)
+        self._emit_progress(status.download_rate,
+                            peer_count=status.num_peers,
+                            seed_count=status.num_seeds)
 
         # 检查是否下载完成
         if status.is_seeding or (self.total_size > 0 and self.downloaded_size >= self.total_size):
@@ -365,12 +287,7 @@ class MagnetDownloadTask(QObject):
         self._set_status(self.COMPLETED)
         self.completed.emit(self.task_id, file_path)
 
-    def _set_status(self, status: str):
-        self.status = status
-        self.status_changed.emit(self.task_id, status)
-
     def _save_state(self):
-        """保存任务状态到JSON文件(非阻塞，不获取resume_data)"""
         state = {
             'task_type': 'magnet',
             'task_id': self.task_id,
@@ -383,15 +300,7 @@ class MagnetDownloadTask(QObject):
             'created_time': self.created_time,
             'metadata_resolved': self._metadata_resolved,
         }
-        os.makedirs(self._temp_dir, exist_ok=True)
-        tmp_path = os.path.join(self._temp_dir, 'task.json.tmp')
-        final_path = os.path.join(self._temp_dir, 'task.json')
-        try:
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, final_path)
-        except Exception as e:
-            _log.warning(f'磁力任务状态保存失败: {self.task_id} - {e}')
+        self._atomic_json_write(state, self._temp_dir)
 
     def _save_resume_data(self):
         """保存 BT 断点续传数据（可能有短暂阻塞，仅在暂停时调用）"""
@@ -470,10 +379,5 @@ class MagnetDownloadTask(QObject):
         return task
 
     def _cleanup_temp(self):
-        """清理临时状态文件"""
-        import shutil
-        try:
-            if os.path.exists(self._temp_dir):
-                shutil.rmtree(self._temp_dir)
-        except Exception:
-            pass
+        """清理临时状态文件（委托基类）"""
+        self._cleanup_state_dir(self._temp_dir)

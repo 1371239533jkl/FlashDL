@@ -3,7 +3,6 @@ PyQt6>=6.6.0
 PyQt6-Qt6>=6.6.0
 PyQt6-sip>=13.6.0
 requests>=2.31.0
-pysubs2>=1.6.0
 
 # BT/磁力下载（如不需要可移除）
 libtorrent>=2.0.0

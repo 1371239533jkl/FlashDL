@@ -3,7 +3,6 @@
 
 import os
 import re
-import subprocess
 import time
 from collections import deque
 from PyQt6.QtCore import Qt, QMimeData, QPoint, QTimer
@@ -18,7 +17,7 @@ import config
 from core.download_manager import DownloadManager
 from core.download_task import DownloadTask
 from data.database import Database
-from utils.format_utils import format_size
+from utils.format_utils import format_size, safe_open_file, safe_open_folder
 from utils.signal_bus import signal_bus
 from utils.settings import get as get_setting, set_value as set_setting
 from ui.styles import get_tokens
@@ -69,7 +68,7 @@ class TaskCard(QFrame):
 
         # 第三行: 速度 / 已下载 / 剩余时间 (统计行)
         row3 = QHBoxLayout()
-        row3.setSpacing(20)
+        row3.setSpacing(12)
 
         stat_speed = QVBoxLayout()
         stat_speed.setSpacing(2)
@@ -138,8 +137,8 @@ class TaskCard(QFrame):
         self.btn_play.hide()
         row4.addWidget(self.btn_play)
 
-        self.btn_stream_play = QPushButton('🎬 边下边播')
-        self.btn_stream_play.setFixedWidth(105)
+        self.btn_stream_play = QPushButton('▶ 边下边播')
+        self.btn_stream_play.setFixedWidth(90)
         self.btn_stream_play.setObjectName('PrimaryBtn')
         self.btn_stream_play.setToolTip('边下载边播放（需下载进度 > 5%）')
         self.btn_stream_play.clicked.connect(self._stream_play)
@@ -290,12 +289,10 @@ class TaskCard(QFrame):
         self.speed_label.style().polish(self.speed_label)
 
     def _open_file(self):
-        if self._file_path and os.path.exists(self._file_path):
-            os.startfile(self._file_path)
+        safe_open_file(self._file_path)
 
     def _open_folder(self):
-        if self._file_path and os.path.exists(self._file_path):
-            subprocess.Popen(f'explorer /select,"{self._file_path}"')
+        safe_open_folder(self._file_path)
 
     def _play_video(self):
         if self._file_path and os.path.exists(self._file_path):
@@ -324,8 +321,7 @@ class TaskCard(QFrame):
             if task and hasattr(task, 'url'):
                 QApplication.clipboard().setText(task.url)
         elif action == open_folder_action:
-            if self._file_path and os.path.exists(self._file_path):
-                subprocess.Popen(f'explorer /select,"{self._file_path}"')
+            safe_open_folder(self._file_path)
         elif action == detail_action:
             self._show_detail_dialog()
 
@@ -516,6 +512,9 @@ class DownloadTab(QWidget):
         # 后台 Worker 引用（防止 GC 回收导致线程中断）
         self._prepare_workers: list = []
         self._cleanup_workers: list = []
+        # 进度更新节流：每个任务最多 10fps，避免信号风暴
+        self._last_progress_update: dict[str, float] = {}
+        self._status_bar_throttle = 0.0
         self._setup_ui()
         self._connect_signals()
         # 剪贴板监听（可通过设置开关）
@@ -639,10 +638,10 @@ class DownloadTab(QWidget):
 
         toolbar_layout.addStretch()
 
-        btn_pause_all = QPushButton('全部暂停')
-        btn_pause_all.setObjectName('SmallBtn')
-        btn_pause_all.clicked.connect(self._pause_all)
-        toolbar_layout.addWidget(btn_pause_all)
+        self.btn_pause_all = QPushButton('全部暂停')
+        self.btn_pause_all.setObjectName('SmallBtn')
+        self.btn_pause_all.clicked.connect(self._toggle_pause_all)
+        toolbar_layout.addWidget(self.btn_pause_all)
         btn_clear_completed = QPushButton('清除已完成')
         btn_clear_completed.setObjectName('SmallBtn')
         btn_clear_completed.clicked.connect(self._clear_completed)
@@ -972,10 +971,21 @@ class DownloadTab(QWidget):
         self._update_status_bar()
 
     def _on_task_progress(self, task_id: str, progress_info: dict):
+        # 节流：每个任务最多 10fps，避免信号风暴
+        now = time.time()
+        task_count = len(self.download_manager.tasks)
+        interval = 0.1 if task_count <= 5 else (0.2 if task_count <= 20 else 0.5)
+        if now - self._last_progress_update.get(task_id, 0) < interval:
+            return
+        self._last_progress_update[task_id] = now
+
         card = self._cards.get(task_id)
         if card:
             card.update_progress(progress_info)
-        self._update_status_bar()
+        # 状态栏最多 2fps
+        if now - self._status_bar_throttle >= 0.5:
+            self._status_bar_throttle = now
+            self._update_status_bar()
 
     def _on_task_status_changed(self, task_id: str, status: str):
         card = self._cards.get(task_id)
@@ -1038,10 +1048,19 @@ class DownloadTab(QWidget):
                 status='failed', created_time=task.created_time
             )
 
-    def _pause_all(self):
-        for task_id, task in self.download_manager.tasks.items():
-            if task.status == DownloadTask.DOWNLOADING:
-                self.download_manager.pause_task(task_id)
+    def _toggle_pause_all(self):
+        """切换全部暂停/全部继续"""
+        active = [t for t in self.download_manager.tasks.values()
+                  if t.status == DownloadTask.DOWNLOADING]
+        if active:
+            for t in active:
+                self.download_manager.pause_task(t.task_id)
+            self.btn_pause_all.setText('全部继续')
+        else:
+            for t in self.download_manager.tasks.values():
+                if t.status in (DownloadTask.PAUSED, DownloadTask.WAITING):
+                    self.download_manager.resume_task(t.task_id)
+            self.btn_pause_all.setText('全部暂停')
 
     def _on_speed_limit_changed(self, index):
         """速度限制下拉改变时，更新全局限速配置"""

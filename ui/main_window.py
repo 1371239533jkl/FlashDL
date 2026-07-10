@@ -2,8 +2,7 @@
 """主窗口 - 无边框窗口、标签页管理、系统托盘"""
 
 from PyQt6.QtCore import Qt, QPoint, QSize, QRect
-import math
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QFont, QPen, QPolygon
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QPen, QPolygon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QSystemTrayIcon, QMenu, QApplication
@@ -25,8 +24,9 @@ class MainWindow(QMainWindow):
         self._resizing = False
         self._resize_edge = None
         self._resize_margin = 6
+        self._is_maximized = False
 
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setMinimumSize(config.MIN_WINDOW_WIDTH, config.MIN_WINDOW_HEIGHT)
         self._restore_geometry()
@@ -157,35 +157,15 @@ class MainWindow(QMainWindow):
 
         return sidebar
 
-    def _make_window_icon(self, icon_type: str) -> QIcon:
-        """统一绘制标题栏窗口控制图标：minimize/maximize/close/restore"""
-        from ui.styles import get_tokens
-        t = get_tokens()
-        pix = QPixmap(16, 16)
-        pix.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(t.text_muted), 1.5)
-        p.setPen(pen)
-        if icon_type == 'minimize':
-            p.drawLine(3, 12, 13, 12)
-        elif icon_type == 'maximize':
-            p.drawRect(4, 4, 8, 8)
-        elif icon_type == 'restore':
-            p.drawRect(5, 7, 6, 5)
-            p.drawLine(5, 7, 10, 2)
-            p.drawLine(10, 2, 11, 2)
-            p.drawLine(11, 2, 11, 7)
-        else:  # close
-            p.drawLine(4, 4, 12, 12)
-            p.drawLine(12, 4, 4, 12)
-        p.end()
-        return QIcon(pix)
-
-
-
+    
     def _make_sidebar_icon(self, icon_type: str, active: bool = False) -> QIcon:
-        """绘制侧边栏单色图标（24px，更显眼）"""
+        """绘制侧边栏单色图标（24px，更显眼，缓存避免重复创建）"""
+        cache_key = (icon_type, active, get_current_theme())
+        if not hasattr(self, '_icon_cache'):
+            self._icon_cache = {}
+        if cache_key in self._icon_cache:
+            return self._icon_cache[cache_key]
+
         from ui.styles import get_tokens
         t = get_tokens()
         size = 36
@@ -238,7 +218,9 @@ class MainWindow(QMainWindow):
             p.drawEllipse(x + 13, y + 9, 7, 7)
             p.drawEllipse(x + 4, y + 16, 7, 7)
         p.end()
-        return QIcon(pix)
+        icon = QIcon(pix)
+        self._icon_cache[cache_key] = icon
+        return icon
 
 
 
@@ -367,12 +349,17 @@ class MainWindow(QMainWindow):
         self.raise_()
 
     def _toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
+        if self._is_maximized:
+            self._is_maximized = False
             self._btn_max.setText('□')
+            self.setGeometry(self._normal_geo)
         else:
-            self.showMaximized()
+            self._normal_geo = self.geometry()
+            self._is_maximized = True
             self._btn_max.setText('▣')
+            screen = QApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.availableGeometry())
 
 
 
@@ -409,6 +396,9 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self._app_icon)
         self.tray_icon.setIcon(self._app_icon)
         self.player_tab.video_widget.setStyleSheet('background-color: #000000; border-radius: 6px;')
+        # 清除图标缓存（主题变了颜色也变了）
+        if hasattr(self, '_icon_cache'):
+            self._icon_cache.clear()
         # 只重绘侧边栏图标（它们需要手动更新颜色）
         icons = ['download', 'play', 'history']
         for i, btn in self._sidebar_icons.items():
@@ -418,9 +408,6 @@ class MainWindow(QMainWindow):
         # 一次性强制刷新
         self.repaint()
         self.history_tab.refresh()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
 
     # === 窗口拖动与缩放 ===
     def mousePressEvent(self, event):
@@ -442,9 +429,12 @@ class MainWindow(QMainWindow):
             return
 
         if self._drag_pos and not self._resizing and pos.y() <= config.TITLE_BAR_HEIGHT:
-            if self.isMaximized():
-                self.showNormal()
+            if self._is_maximized:
+                self._is_maximized = False
                 self._btn_max.setText('□')
+                self.setGeometry(self._normal_geo)
+                # Recalculate drag after restore
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             return
 
@@ -562,4 +552,5 @@ class MainWindow(QMainWindow):
             if is_libtorrent_available():
                 MagnetSessionManager.get_instance().shutdown()
         except Exception:
-            pass
+            import traceback
+            traceback.print_exc()
