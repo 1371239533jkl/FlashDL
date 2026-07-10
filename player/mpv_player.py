@@ -400,22 +400,19 @@ class MpvPlayer(QObject):
     def get_chapters(self) -> list:
         """获取章节列表 [{index, title, time_ms}]"""
         try:
-            # 使用 mpv 原生命令获取章节数
-            count = self._mpv.command('get_property', 'chapter-list/count')
-            if not count or count <= 0:
+            # 优先用 python-mpv 原生属性 chapter_list
+            raw = self._mpv.chapter_list
+            if not raw:
                 return []
             chapters = []
-            for i in range(count):
-                try:
-                    title = self._mpv.command('get_property', f'chapter-list/{i}/title') or f'章节 {i + 1}'
-                    time_sec = self._mpv.command('get_property', f'chapter-list/{i}/time') or 0
-                    chapters.append({
-                        'index': i,
-                        'title': title,
-                        'time_ms': int(float(time_sec) * 1000),
-                    })
-                except Exception:
-                    continue
+            for i, ch in enumerate(raw):
+                title = ch.get('title', '') or f'章节 {i + 1}'
+                time_sec = ch.get('time', 0) or 0
+                chapters.append({
+                    'index': i,
+                    'title': title,
+                    'time_ms': int(float(time_sec) * 1000),
+                })
             return chapters
         except Exception:
             return []

@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QWidget, QLineEdit, QSpinBox, QCheckBox,
-    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider, QGridLayout
+    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider
 )
 
 import config
@@ -305,7 +305,7 @@ class SettingsDialog(QDialog):
         set_setting('default_volume', self.default_volume.value())
         set_setting('subtitle_auto_load', self.auto_load_subtitle.isChecked())
         set_setting('subtitle_font_size', self.subtitle_font_size.value())
-        config.SUBTITLE_FONT_SIZE = self.subtitle_font_size.value()  # 运行时立即生效
+        config.SUBTITLE_FONT_SIZE = self.subtitle_font_size.value()
 
         # 下载完成后操作
         set_setting('completion_action', self.completion_action.currentData())
