@@ -370,16 +370,33 @@ def _build_stylesheet(theme: str) -> str:
     }}
 
     /* ── 输入框 ── */
-    QLineEdit, QPlainTextEdit {{
+    QLineEdit, QPlainTextEdit, QSpinBox {{
         background-color: {t.bg_input};
         color: {t.text_primary};
         border: 1px solid {t.border_default};
         border-radius: 6px;
-        padding: 6px 10px;
+        padding: 5px 10px;
         selection-background-color: {t.accent}66;
     }}
-    QLineEdit:focus, QPlainTextEdit:focus {{
+    QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus {{
         border-color: {t.accent};
+    }}
+    QSpinBox::up-button, QSpinBox::down-button {{
+        subcontrol-origin: border;
+        width: 18px;
+        border: none;
+        background: transparent;
+    }}
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+        background: {t.bg_elevated};
+    }}
+    QSpinBox::up-arrow {{
+        image: none;
+        width: 8px; height: 8px;
+    }}
+    QSpinBox::down-arrow {{
+        image: none;
+        width: 8px; height: 8px;
     }}
 
     /* ── 下拉框 ── */
@@ -388,9 +405,8 @@ def _build_stylesheet(theme: str) -> str:
         color: {t.text_primary};
         border: 1px solid {t.border_default};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 5px 10px;
         min-width: 60px;
-        min-height: 24px;
     }}
     QComboBox:hover {{
         border-color: {t.border_hover};

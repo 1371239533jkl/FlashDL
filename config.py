@@ -63,6 +63,38 @@ BT_POLL_INTERVAL = 500               # BT状态轮询间隔(毫秒)
 BT_DHT_STATE_FILE = str(Path(__file__).parent / "data" / "dht_state.dat")
 MAGNET_TEMP_DIR = str(Path(__file__).parent / "temp" / "magnets")
 
+# 代理配置
+PROXY_ENABLED = False               # 是否启用代理
+PROXY_TYPE = 'http'                 # http / socks5
+PROXY_HOST = '127.0.0.1'            # 代理地址
+PROXY_PORT = 1080                   # 代理端口
+PROXY_USERNAME = ''                 # 代理用户名（可选）
+PROXY_PASSWORD = ''                 # 代理密码（可选）
+
+def get_requests_proxy() -> dict | None:
+    """返回 requests 库用的 proxies 字典，未启用时返回 None"""
+    if not PROXY_ENABLED:
+        return None
+    scheme = 'socks5' if PROXY_TYPE == 'socks5' else 'http'
+    if PROXY_USERNAME and PROXY_PASSWORD:
+        url = f'{scheme}://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}'
+    else:
+        url = f'{scheme}://{PROXY_HOST}:{PROXY_PORT}'
+    return {'http': url, 'https': url}
+
+
+def get_lt_proxy() -> tuple:
+    """返回 libtorrent 代理设置 (type, host, port, user, pass)，未启用时返回 (0,'',0,'','')"""
+    if not PROXY_ENABLED:
+        return (0, '', 0, '', '')
+    type_map = {'http': 4, 'socks5': 2}
+    if PROXY_USERNAME and PROXY_PASSWORD:
+        lt_type = type_map.get(PROXY_TYPE, 4) + 1  # 带认证 +1
+    else:
+        lt_type = type_map.get(PROXY_TYPE, 4)
+    return (lt_type, PROXY_HOST, PROXY_PORT, PROXY_USERNAME, PROXY_PASSWORD)
+
+
 # 确保必要目录存在
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

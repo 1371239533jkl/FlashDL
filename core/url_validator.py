@@ -7,6 +7,7 @@ from urllib.parse import urlparse, unquote, parse_qs
 from pathlib import PurePosixPath
 
 import config
+from config import get_requests_proxy as _get_proxy
 
 
 def validate_url(url: str, headers: dict = None) -> dict:
@@ -57,6 +58,7 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
     custom_headers = custom_headers or {}
     # 发送HEAD请求获取文件信息
     try:
+        proxies = _get_proxy() if config.PROXY_ENABLED else None
         headers = {
             'User-Agent': custom_headers.get('User-Agent',
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
@@ -68,7 +70,8 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
         resp = requests.head(
             url, headers=headers, allow_redirects=True,
             timeout=(config.CONNECT_TIMEOUT, config.READ_TIMEOUT),
-            verify=False  # 兼容CDN证书不匹配
+            verify=False, proxies=proxies
+            # 兼容CDN证书不匹配
         )
         resp.raise_for_status()
         _parse_response(result, resp, url)
@@ -82,7 +85,7 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
                 get_resp = requests.get(
                     url, headers=headers, stream=True,
                     timeout=(config.CONNECT_TIMEOUT, config.READ_TIMEOUT),
-                    verify=False
+                    verify=False, proxies=proxies
                 )
                 if get_resp.status_code in (200, 206, 301, 302, 307, 308):
                     try:

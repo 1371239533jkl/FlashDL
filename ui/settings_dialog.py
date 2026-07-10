@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QWidget, QLineEdit, QSpinBox, QCheckBox,
-    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider
+    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider, QGridLayout
 )
 
 import config
@@ -18,8 +18,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('设置')
-        self.setFixedWidth(520)
-        self.setMinimumHeight(420)
+        self.setMinimumSize(750, 800)
         self._setup_ui()
         self._load_settings()
 
@@ -101,6 +100,37 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(dl_group)
 
+        # 代理（与下载参数/下载完成后一样用 QFormLayout，不设任何固定宽度）
+        proxy_group = QGroupBox('网络代理（HTTP下载 + BT 均生效）')
+        proxy_form = QFormLayout(proxy_group)
+        proxy_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        proxy_form.setSpacing(10)
+        proxy_form.setContentsMargins(16, 18, 16, 14)
+        proxy_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.proxy_enabled = QCheckBox()
+        self.proxy_type = QComboBox()
+        self.proxy_type.addItem('HTTP', 'http')
+        self.proxy_type.addItem('SOCKS5', 'socks5')
+        self.proxy_host = QLineEdit()
+        self.proxy_host.setPlaceholderText('127.0.0.1')
+        self.proxy_port = QSpinBox()
+        self.proxy_port.setRange(1, 65535)
+        self.proxy_username = QLineEdit()
+        self.proxy_username.setPlaceholderText('（可选）')
+        self.proxy_password = QLineEdit()
+        self.proxy_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.proxy_password.setPlaceholderText('（可选）')
+
+        proxy_form.addRow('启用代理:', self.proxy_enabled)
+        proxy_form.addRow('代理类型:', self.proxy_type)
+        proxy_form.addRow('代理地址:', self.proxy_host)
+        proxy_form.addRow('代理端口:', self.proxy_port)
+        proxy_form.addRow('用户名:', self.proxy_username)
+        proxy_form.addRow('密码:', self.proxy_password)
+
+        layout.addWidget(proxy_group)
+
         # 下载完成后操作
         actions_group = QGroupBox('下载完成后')
         actions_form = QFormLayout(actions_group)
@@ -179,6 +209,18 @@ class SettingsDialog(QDialog):
         self.auto_load_subtitle = QCheckBox()
         form.addRow('自动加载同名字幕:', self.auto_load_subtitle)
 
+        # 字幕字体大小
+        sub_size_row = QHBoxLayout()
+        self.subtitle_font_size = QSlider(Qt.Orientation.Horizontal)
+        self.subtitle_font_size.setRange(12, 48)
+        self.subtitle_font_size.valueChanged.connect(self._on_sub_font_size_changed)
+        sub_size_row.addWidget(self.subtitle_font_size)
+        self._sub_fs_label = QLabel('16')
+        self._sub_fs_label.setFixedWidth(35)
+        self._sub_fs_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sub_size_row.addWidget(self._sub_fs_label)
+        form.addRow('字幕字体大小:', sub_size_row)
+
         layout.addWidget(player_group)
         layout.addStretch()
         return tab
@@ -224,10 +266,19 @@ class SettingsDialog(QDialog):
         # 播放器
         self.default_volume.setValue(get_setting('default_volume', config.DEFAULT_VOLUME))
         self.auto_load_subtitle.setChecked(get_setting('subtitle_auto_load', config.SUBTITLE_AUTO_LOAD))
+        self.subtitle_font_size.setValue(get_setting('subtitle_font_size', config.SUBTITLE_FONT_SIZE))
 
         # 下载完成后操作
         action = get_setting('completion_action', 'none')
         self._set_combo_value(self.completion_action, action)
+
+        # 代理
+        self.proxy_enabled.setChecked(get_setting('proxy_enabled', config.PROXY_ENABLED))
+        self._set_combo_value(self.proxy_type, get_setting('proxy_type', config.PROXY_TYPE))
+        self.proxy_host.setText(get_setting('proxy_host', config.PROXY_HOST))
+        self.proxy_port.setValue(get_setting('proxy_port', config.PROXY_PORT))
+        self.proxy_username.setText(get_setting('proxy_username', config.PROXY_USERNAME))
+        self.proxy_password.setText(get_setting('proxy_password', config.PROXY_PASSWORD))
 
         # 通用
         self.clipboard_monitor.setChecked(get_setting('clipboard_monitor', True))
@@ -253,9 +304,25 @@ class SettingsDialog(QDialog):
         # 播放器
         set_setting('default_volume', self.default_volume.value())
         set_setting('subtitle_auto_load', self.auto_load_subtitle.isChecked())
+        set_setting('subtitle_font_size', self.subtitle_font_size.value())
+        config.SUBTITLE_FONT_SIZE = self.subtitle_font_size.value()  # 运行时立即生效
 
         # 下载完成后操作
         set_setting('completion_action', self.completion_action.currentData())
+
+        # 代理（运行时立即生效）
+        set_setting('proxy_enabled', self.proxy_enabled.isChecked())
+        set_setting('proxy_type', self.proxy_type.currentData())
+        set_setting('proxy_host', self.proxy_host.text().strip())
+        set_setting('proxy_port', self.proxy_port.value())
+        set_setting('proxy_username', self.proxy_username.text().strip())
+        set_setting('proxy_password', self.proxy_password.text().strip())
+        config.PROXY_ENABLED = self.proxy_enabled.isChecked()
+        config.PROXY_TYPE = self.proxy_type.currentData()
+        config.PROXY_HOST = self.proxy_host.text().strip()
+        config.PROXY_PORT = self.proxy_port.value()
+        config.PROXY_USERNAME = self.proxy_username.text().strip()
+        config.PROXY_PASSWORD = self.proxy_password.text().strip()
 
         # 通用
         set_setting('clipboard_monitor', self.clipboard_monitor.isChecked())
@@ -272,6 +339,9 @@ class SettingsDialog(QDialog):
 
     def _on_volume_changed(self, value):
         self._vol_label.setText(str(value))
+
+    def _on_sub_font_size_changed(self, value):
+        self._sub_fs_label.setText(str(value))
 
     @staticmethod
     def _set_combo_value(combo: QComboBox, value):

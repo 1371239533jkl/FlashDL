@@ -5,6 +5,7 @@ import os
 import sys
 
 import config
+from config import get_lt_proxy
 
 # libtorrent 延迟导入（避免打包后 DLL 加载顺序问题）
 lt = None
@@ -74,6 +75,17 @@ class MagnetSessionManager:
             'announce_to_all_tiers': True,
             'announce_to_all_trackers': True,
         }
+        # 代理设置
+        pt, ph, pp, pu, pw = get_lt_proxy()
+        if pt:
+            settings.update({
+                'proxy_type': pt,
+                'proxy_hostname': ph,
+                'proxy_port': pp,
+                'proxy_username': pu,
+                'proxy_password': pw,
+                'force_proxy': True,
+            })
         self.session.apply_settings(settings)
 
         # 启用扩展协议（逐一带 try 兼容旧版 libtorrent）

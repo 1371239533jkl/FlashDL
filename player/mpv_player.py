@@ -151,6 +151,9 @@ class MpvPlayer(QObject):
         self._paused = False
         self._playback_state = self.PLAYING
         self.playback_state_changed.emit(self.PLAYING)
+        # 应用字幕字体大小
+        from config import SUBTITLE_FONT_SIZE
+        self._mpv.sub_font_size = SUBTITLE_FONT_SIZE
 
     def play(self):
         """播放"""
