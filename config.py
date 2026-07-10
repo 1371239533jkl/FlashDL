@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 应用信息
 APP_NAME = "FlashDL - 视频下载 & 播放工具"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.1.0"
 
 # 下载配置
 DEFAULT_THREAD_COUNT = 4          # 默认下载线程数
