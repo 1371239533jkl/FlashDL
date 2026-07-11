@@ -300,13 +300,14 @@ class MpvPlayer(QObject):
     def get_video_info(self) -> dict:
         """获取当前视频信息：分辨率、编码、FPS、码率、时长、章节"""
         try:
-            w = self._mpv.width or 0
-            h = self._mpv.height or 0
+            w = self._mpv.width
+            h = self._mpv.height
             codec = self._mpv.video_codec or ''
             fps = self._mpv.container_fps or 0
             bitrate = self._mpv.video_bitrate or 0
             duration = self._mpv.duration or 0
-            chapters = self._mpv.chapter_list_count or 0
+            # chapter_list_count 在某些 python-mpv 版本不存在，用 getattr 防御
+            chapters = getattr(self._mpv, 'chapter_list_count', 0) or 0
             return {
                 'resolution': f'{w}x{h}' if w and h else '',
                 'codec': codec,
