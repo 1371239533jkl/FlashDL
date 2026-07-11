@@ -399,12 +399,14 @@ class PlayerTab(QWidget):
         self._is_fullscreen = True
         self._controls_frame.hide()
         self._playlist_panel.hide()
-        # 隐藏主窗口的标题栏和标签栏
+        # 隐藏主窗口的标题栏、标签栏、侧边栏
         main_win = self.video_widget.window()
         if hasattr(main_win, '_title_bar'):
             main_win._title_bar.hide()
         if hasattr(main_win, 'tab_widget'):
             main_win.tab_widget.tabBar().hide()
+        if hasattr(main_win, '_sidebar'):
+            main_win._sidebar.hide()
         main_win.installEventFilter(self)
         main_win.showFullScreen()
         self.video_widget.setFocus()
@@ -424,6 +426,8 @@ class PlayerTab(QWidget):
             main_win._title_bar.show()
         if hasattr(main_win, 'tab_widget'):
             main_win.tab_widget.tabBar().show()
+        if hasattr(main_win, '_sidebar'):
+            main_win._sidebar.show()
         self._controls_frame.show()
         self._playlist_panel.show()
         self.video_widget.setCursor(Qt.CursorShape.ArrowCursor)
@@ -1405,38 +1409,33 @@ class _VideoInfoOverlay(QWidget):
     def _refresh_info(self):
         info = self._player_tab.player.get_video_info()
         file_path = self._player_tab.player.current_file or ''
-        # 用位置和当前文件做快照，无变化时跳过重建避免闪烁
         position = self._player_tab.player.position
-        # ponytail: duration 不入 snapshot，因为它可能在视频加载后才从 0→真实值
         snapshot = (file_path, position,
                     info.get('resolution', ''), info.get('codec', ''),
-                    info.get('fps', ''), info.get('bitrate', ''),
-                    info.get('chapters', 0))
-        same_snapshot = snapshot == getattr(self, '_last_snapshot', None)
-        dur_changed = info.get('duration', 0) != getattr(self, '_last_duration', 0)
-        if same_snapshot and not dur_changed:
+                    info.get('fps', ''), info.get('bitrate', ''))
+        if snapshot == getattr(self, '_last_snapshot', None):
             return
         self._last_snapshot = snapshot
-        self._last_duration = info.get('duration', 0)
 
         while self._info_lines.count():
             item = self._info_lines.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        import os
         if file_path:
-            lbl = QLabel(f'文件: {os.path.basename(file_path)}')
-            lbl.setStyleSheet(self._label_style())
-            self._info_lines.addWidget(lbl)
-            # 文件大小
+            label = QLabel(f'文件: {os.path.basename(file_path)}')
+            label.setStyleSheet(self._label_style())
+            self._info_lines.addWidget(label)
+            # 新增：文件大小
             if os.path.exists(file_path):
-                size = os.path.getsize(file_path)
                 from utils.format_utils import format_size
+                size = os.path.getsize(file_path)
                 lbl = QLabel(f'大小: {format_size(size)}')
                 lbl.setStyleSheet(self._label_style())
                 self._info_lines.addWidget(lbl)
 
-        # 时长
+        # 新增：时长
         dur = info.get('duration', 0)
         dur_text = self._format_duration(dur) if dur else '--'
         lbl = QLabel(f'时长: {dur_text}')
@@ -1451,6 +1450,7 @@ class _VideoInfoOverlay(QWidget):
             lbl.setStyleSheet(self._label_style())
             self._info_lines.addWidget(lbl)
 
+        # 新增：章节
         chapters = info.get('chapters', 0)
         if chapters:
             lbl = QLabel(f'章节: {chapters} 个')
