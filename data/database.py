@@ -151,6 +151,40 @@ class Database:
                 ).fetchall()
             return [dict(row) for row in rows], total
 
+    # ═══ 统计查询 ═══
+
+    def get_statistics(self, time_filter: str = 'all') -> dict:
+        """获取下载统计：总数、成功数、失败数、累计流量。
+        time_filter: 'all' | 'today' | 'week' | 'month'"""
+        time_clause = ''
+        if time_filter == 'today':
+            time_clause = "AND date(created_time) = date('now', 'localtime')"
+        elif time_filter == 'week':
+            time_clause = "AND date(created_time) >= date('now', '-7 days', 'localtime')"
+        elif time_filter == 'month':
+            time_clause = "AND date(created_time) >= date('now', '-30 days', 'localtime')"
+
+        with self._connect() as conn:
+            total = conn.execute(
+                f'SELECT COUNT(*) FROM download_history WHERE 1=1 {time_clause}'
+            ).fetchone()[0]
+            completed = conn.execute(
+                f"SELECT COUNT(*) FROM download_history WHERE status='completed' {time_clause}"
+            ).fetchone()[0]
+            failed = conn.execute(
+                f"SELECT COUNT(*) FROM download_history WHERE status='failed' {time_clause}"
+            ).fetchone()[0]
+            total_size = conn.execute(
+                f"SELECT COALESCE(SUM(file_size), 0) FROM download_history WHERE status='completed' {time_clause}"
+            ).fetchone()[0]
+            return {
+                'total': total,
+                'completed': completed,
+                'failed': failed,
+                'total_size': total_size,
+                'success_rate': round(completed / total * 100, 1) if total > 0 else 0.0,
+            }
+
     # ═══ 导出 ═══
 
     def export_csv(self, file_path: str) -> int:

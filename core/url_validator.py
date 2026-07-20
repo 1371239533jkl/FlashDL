@@ -2,12 +2,31 @@
 """URL验证模块 - 验证下载链接有效性并获取文件信息，支持 HTTP/HTTPS 和磁力链接"""
 
 import re
+import ipaddress
 import requests
 from urllib.parse import urlparse, unquote, parse_qs
 from pathlib import PurePosixPath
 
 import config
-from config import get_requests_proxy as _get_proxy
+from config import get_requests_proxy as _get_proxy, should_verify_cert as _should_verify_cert
+
+
+def _is_private_host(hostname: str) -> bool:
+    """检测主机名是否指向私有/保留/内网地址"""
+    if not hostname:
+        return False
+    # 直接写死的内网名称
+    if hostname.lower() in ('localhost', '127.0.0.1', '0.0.0.0', '[::1]'):
+        return True
+    try:
+        ip = ipaddress.ip_address(hostname)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    except ValueError:
+        return False
+
+
+
+
 
 
 def validate_url(url: str, headers: dict = None) -> dict:
@@ -51,11 +70,15 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
         if not parsed.netloc:
             result['error'] = 'URL 格式不正确'
             return result
+        if _is_private_host(parsed.hostname):
+            result['error'] = '不允许下载内网或本地地址'
+            return result
     except Exception:
         result['error'] = 'URL 格式不正确'
         return result
 
     custom_headers = custom_headers or {}
+
     # 发送HEAD请求获取文件信息
     try:
         proxies = _get_proxy() if config.PROXY_ENABLED else None
@@ -70,9 +93,9 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
         resp = requests.head(
             url, headers=headers, allow_redirects=True,
             timeout=(config.CONNECT_TIMEOUT, config.READ_TIMEOUT),
-            verify=False, proxies=proxies
-            # 兼容CDN证书不匹配
+            verify=_should_verify_cert(url), proxies=proxies
         )
+
         resp.raise_for_status()
         _parse_response(result, resp, url)
         return result
@@ -85,8 +108,9 @@ def _validate_http_url(url: str, custom_headers: dict = None) -> dict:
                 get_resp = requests.get(
                     url, headers=headers, stream=True,
                     timeout=(config.CONNECT_TIMEOUT, config.READ_TIMEOUT),
-                    verify=False, proxies=proxies
+                    verify=_should_verify_cert(url), proxies=proxies
                 )
+
                 if get_resp.status_code in (200, 206, 301, 302, 307, 308):
                     try:
                         next(get_resp.iter_content(1))

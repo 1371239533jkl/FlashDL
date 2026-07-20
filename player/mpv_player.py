@@ -40,6 +40,7 @@ class MpvPlayer(QObject):
         super().__init__(parent)
         self._container = container
         self._current_file = ''
+        self._terminated = False
 
         # 缓存状态
         self._position = 0
@@ -487,6 +488,9 @@ class MpvPlayer(QObject):
 
     def cleanup(self):
         """释放 mpv 资源"""
+        if self._terminated:
+            return
+        self._terminated = True
         self._poll_timer.stop()
         try:
             self._mpv.terminate()

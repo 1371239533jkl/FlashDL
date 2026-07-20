@@ -7,6 +7,7 @@ from pathlib import Path
 # 应用信息
 APP_NAME = "FlashDL - 视频下载 & 播放工具"
 APP_VERSION = "2.1.0"
+URL_HISTORY_MAX = 20  # URL 输入历史最大条数
 
 # 下载配置
 DEFAULT_THREAD_COUNT = 4          # 默认下载线程数
@@ -24,7 +25,40 @@ MAX_RETRIES = 3                   # 下载分块失败最大重试次数
 RETRY_DELAY = 2.0                 # 重试间隔(秒)
 
 # 下载速度限制 (0=无限制, 单位: bytes/s)
-DOWNLOAD_SPEED_LIMIT = 0          # 全局HTTP下载速度限制
+# ponytail: 运行时使用 get_speed_limit() / set_speed_limit()，不要直接修改此变量
+DOWNLOAD_SPEED_LIMIT = 0
+
+
+class _SpeedLimit:
+    """线程安全的全局限速值封装"""
+    import threading
+    _lock = threading.Lock()
+    _value = 0
+
+    @classmethod
+    def get(cls) -> int:
+        with cls._lock:
+            return cls._value
+
+    @classmethod
+    def set(cls, value: int):
+        with cls._lock:
+            cls._value = value
+
+
+def get_speed_limit() -> int:
+    """获取当前全局 HTTP 下载限速（bytes/s），0=无限制"""
+    return _SpeedLimit.get()
+
+
+def set_speed_limit(value: int):
+    """设置全局 HTTP 下载限速（bytes/s），0=无限制"""
+    _SpeedLimit.set(value)
+
+
+# 启动时从环境变量同步一次初始值（兼容旧的直接读取）
+if DOWNLOAD_SPEED_LIMIT:
+    _SpeedLimit.set(DOWNLOAD_SPEED_LIMIT)
 
 # 路径配置
 DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Downloads")
@@ -70,6 +104,25 @@ PROXY_HOST = '127.0.0.1'            # 代理地址
 PROXY_PORT = 1080                   # 代理端口
 PROXY_USERNAME = ''                 # 代理用户名（可选）
 PROXY_PASSWORD = ''                 # 代理密码（可选）
+
+# SSL 配置
+# 默认开启 TLS 证书验证；仅在明确关闭（如环境变量 FLASHDL_SSL_VERIFY=false）时才跳过。
+# 如有域名需要跳过证书校验，请加入 SSL_INSECURE_DOMAINS 白名单。
+SSL_VERIFY = os.environ.get('FLASHDL_SSL_VERIFY', 'true').lower() != 'false'
+SSL_INSECURE_DOMAINS = set()
+
+
+def should_verify_cert(url: str) -> bool:
+    """根据 URL 决定是否验证 TLS 证书（默认开启，仅白名单域名跳过）"""
+    if SSL_VERIFY:
+        return True
+    from urllib.parse import urlparse
+    try:
+        domain = urlparse(url).hostname or ''
+        return domain not in SSL_INSECURE_DOMAINS
+    except Exception:
+        return True
+
 
 def get_requests_proxy() -> dict | None:
     """返回 requests 库用的 proxies 字典，未启用时返回 None"""

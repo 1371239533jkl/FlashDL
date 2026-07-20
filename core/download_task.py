@@ -87,18 +87,31 @@ class DownloadTask(BaseDownloadTask):
                 counter += 1
 
         if self.total_size > 0:
+            # 检查磁盘剩余空间（保留 100MB 缓冲）
+            import shutil
+            free_space = shutil.disk_usage(self.save_dir).free
+            if free_space < self.total_size + 100 * 1024 * 1024:
+                self.error_message = f'磁盘空间不足（需要 {format_size(self.total_size)}，可用 {format_size(free_space)}）'
+                self._set_status(self.FAILED)
+                return False
             # 预分配文件空间（稀疏文件，不占实际磁盘空间）
             # 仅在新任务或文件不存在时执行
             if not os.path.exists(save_path) or os.path.getsize(save_path) < self.total_size:
-                with open(save_path, 'wb') as f:
-                    f.seek(self.total_size - 1)
-                    f.write(b'\0')
+                try:
+                    with open(save_path, 'wb') as f:
+                        f.seek(self.total_size - 1)
+                        f.write(b'\0')
+                except OSError as e:
+                    self.error_message = f'写入文件失败: {e}'
+                    self._set_status(self.FAILED)
+                    return False
         else:
             # 大小未知时创建空文件
             if not os.path.exists(save_path):
                 open(save_path, 'wb').close()
 
         # 划分分块
+
         os.makedirs(self._state_dir, exist_ok=True)
         self._create_chunks()
         self._save_state()
@@ -215,12 +228,17 @@ class DownloadTask(BaseDownloadTask):
     def _start_workers(self):
         """为未完成的分块创建并启动工作线程"""
         self._stop_workers()
+        # 等待旧线程真正退出后再创建新线程，避免 QThread 重复 start 崩溃
+        for w in self._workers:
+            if w.isRunning():
+                w.wait(3000)
         self._workers = []
 
         # 计算每个 worker 的限速（总限速 / 活跃 worker 数）
         pending_chunks = [c for c in self.chunks if c['status'] != 'completed']
         active_count = len(pending_chunks)
-        total_limit = getattr(config, 'DOWNLOAD_SPEED_LIMIT', 0)
+        from config import get_speed_limit
+        total_limit = get_speed_limit()
         per_worker_limit = (total_limit // active_count) if (total_limit > 0 and active_count > 0) else 0
 
         for chunk in self.chunks:

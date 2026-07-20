@@ -9,7 +9,7 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 import config
-from config import get_requests_proxy as _get_proxy
+from config import get_requests_proxy as _get_proxy, should_verify_cert as _should_verify_cert
 
 # 关闭不安全连接警告（CDN证书不匹配时）
 import urllib3
@@ -112,8 +112,8 @@ class DownloadWorker(QThread):
                 resp = requests.get(
                     self.url, headers=headers, stream=True,
                     timeout=(config.CONNECT_TIMEOUT, config.READ_TIMEOUT),
-                    verify=False, proxies=proxies
-                    # 兼容CDN证书不匹配的域名（如腾讯视频CDN）
+                    verify=_should_verify_cert(self.url), proxies=proxies
+                    # 兼容CDN证书不匹配：可通过环境变量 FLASHDL_SSL_VERIFY=false 关闭，或加入白名单
                 )
                 if resp.status_code not in (200, 206):
                     # 4xx 错误不重试（除了429）
