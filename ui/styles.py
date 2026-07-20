@@ -629,13 +629,15 @@ def _build_stylesheet(theme: str) -> str:
     }}
 
     /* ── 右键菜单 ── */
-    QMenu {{
+    QMenu,
+    #PlayerMenu {{
         background-color: {t.bg_elevated};
         border: 1px solid {t.border_default};
         border-radius: 8px;
         padding: 6px;
     }}
-    QMenu::item {{
+    QMenu::item,
+    #PlayerMenu::item {{
         padding: 4px 24px 4px 10px;
         border-radius: 4px;
         min-height: 20px;
@@ -647,6 +649,12 @@ def _build_stylesheet(theme: str) -> str:
         height: 1px;
         background: {t.border_default};
         margin: 4px 8px;
+    }}
+
+    /* ponytail: 播放器独立菜单更小更紧凑 */
+    #PlayerMenu {{
+        font-size: 12px;
+        padding: 4px;
     }}
 
     /* ── 播放器控制条 ── */
@@ -939,5 +947,139 @@ def _build_stylesheet(theme: str) -> str:
         background-color: {t.border_subtle};
         min-height: 1px;
         max-height: 1px;
+    }}
+
+    /* ── 下载页 - URL 历史按钮 ── */
+    #UrlHistoryBtn {{
+        background: transparent;
+        border: none;
+        color: {t.text_muted};
+        font-size: 13px;
+        min-width: 24px;
+        max-width: 24px;
+        min-height: 24px;
+        max-height: 24px;
+        border-radius: 4px;
+        padding: 0px;
+    }}
+    #UrlHistoryBtn:hover {{
+        background-color: {t.bg_hover};
+        color: {t.text_secondary};
+    }}
+
+    /* ── 历史页 - 统计面板 ── */
+    #HistoryStatsPanel {{
+        background-color: {t.bg_elevated};
+        border: 1px solid {t.border_subtle};
+        border-radius: 8px;
+        padding: 12px 16px;
+    }}
+    #HistoryStatValue {{
+        font-size: 22px;
+        font-weight: 700;
+        color: {t.text_primary};
+        background: transparent;
+    }}
+    #HistoryStatLabel {{
+        font-size: 10px;
+        color: {t.text_muted};
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        background: transparent;
+    }}
+
+    /* ── 历史页 - 时间筛选药丸 ── */
+    #TimeFilterChip {{
+        background-color: transparent;
+        color: {t.text_muted};
+        border: 1px solid {t.border_default};
+        border-radius: 12px;
+        padding: 4px 10px;
+        font-size: 10px;
+        font-weight: 500;
+    }}
+    #TimeFilterChip:checked {{
+        background-color: {t.accent_dim};
+        color: {t.accent};
+        border-color: {t.accent_dim};
+    }}
+    #TimeFilterChip:hover:!checked {{
+        color: {t.text_secondary};
+        border-color: {t.border_hover};
+    }}
+
+    /* ── 播放器 - 品牌占位 ── */
+    #PlayerBrandIcon {{
+        font-size: 48px;
+        color: {t.text_muted};
+        background: transparent;
+    }}
+    #PlayerBrandText {{
+        font-size: 16px;
+        font-weight: 600;
+        color: {t.text_secondary};
+        background: transparent;
+    }}
+    #PlayerBrandHint {{
+        font-size: 12px;
+        color: {t.text_muted};
+        background: transparent;
+    }}
+
+    /* ── 播放器 - 播放模式按钮 ── */
+    #PlayModeBtn {{
+        background: transparent;
+        border: 1px solid {t.border_default};
+        border-radius: 4px;
+        color: {t.text_muted};
+        font-size: 11px;
+        padding: 2px 8px;
+        min-height: 22px;
+    }}
+    #PlayModeBtn:hover {{
+        background-color: {t.bg_hover};
+        color: {t.text_secondary};
+    }}
+    #PlayModeBtn[active="true"] {{
+        background-color: {t.accent_dim};
+        color: {t.accent};
+        border-color: {t.accent_dim};
+    }}
+
+    /* ── 播放器 - 状态标签（音轨/字幕） ── */
+    #PlayerStatusTag {{
+        font-size: 10px;
+        color: {t.accent};
+        background-color: {t.accent_dim};
+        border-radius: 3px;
+        padding: 1px 6px;
+    }}
+
+    /* ── 侧边栏 - 快捷键提示 ── */
+    #SidebarShortcut {{
+        color: {t.text_muted};
+        font-size: 8px;
+        background: transparent;
+        padding: 4px 0px;
+        margin: 0px;
+    }}
+
+    /* ── 设置 - 关于标签页 ── */
+    #AboutTitle {{
+        font-size: 18px;
+        font-weight: 700;
+        color: {t.text_primary};
+        background: transparent;
+    }}
+    #AboutVersion {{
+        font-size: 12px;
+        color: {t.accent};
+        background: transparent;
+    }}
+    #AboutInfo {{
+        font-size: 12px;
+        color: {t.text_secondary};
+        background: transparent;
+        line-height: 1.5;
     }}
     """

@@ -18,7 +18,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('设置')
-        self.setMinimumSize(750, 800)
+        self.setMinimumSize(750, 840)
         self._setup_ui()
         self._load_settings()
 
@@ -33,6 +33,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._create_bt_tab(), 'BT / 磁力')
         self.tabs.addTab(self._create_player_tab(), '播放器')
         self.tabs.addTab(self._create_general_tab(), '通用')
+        self.tabs.addTab(self._create_about_tab(), '关于')
         layout.addWidget(self.tabs)
 
         # 底部按钮
@@ -97,6 +98,9 @@ class SettingsDialog(QDialog):
         self.max_retries = QSpinBox()
         self.max_retries.setRange(0, 10)
         form.addRow('下载重试次数:', self.max_retries)
+
+        self.auto_clean_completed = QCheckBox()
+        form.addRow('下载完成后自动清理卡片:', self.auto_clean_completed)
 
         layout.addWidget(dl_group)
 
@@ -221,6 +225,9 @@ class SettingsDialog(QDialog):
         sub_size_row.addWidget(self._sub_fs_label)
         form.addRow('字幕字体大小:', sub_size_row)
 
+        self.remember_progress = QCheckBox()
+        form.addRow('记住播放进度:', self.remember_progress)
+
         layout.addWidget(player_group)
         layout.addStretch()
         return tab
@@ -242,8 +249,73 @@ class SettingsDialog(QDialog):
         self.completion_sound = QCheckBox()
         form.addRow('下载完成提示音:', self.completion_sound)
 
+        self.minimize_to_tray = QCheckBox()
+        form.addRow('关闭时最小化到托盘:', self.minimize_to_tray)
+
+        self.start_minimized = QCheckBox()
+        form.addRow('启动时最小化到托盘:', self.start_minimized)
+
         layout.addWidget(general_group)
         layout.addStretch()
+        return tab
+
+    # ═══ 关于 ═══
+
+    def _create_about_tab(self) -> QWidget:
+        """关于标签页：版本信息、技术栈、许可证"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(16)
+        layout.setContentsMargins(32, 32, 32, 32)
+
+        # 应用名和图标
+        title = QLabel(config.APP_NAME)
+        title.setObjectName('AboutTitle')
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        version = QLabel(f'版本 {config.APP_VERSION}')
+        version.setObjectName('AboutVersion')
+        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(version)
+
+        layout.addSpacing(12)
+
+        # 技术栈信息
+        info_group = QGroupBox('技术栈')
+        info_layout = QVBoxLayout(info_group)
+        info_layout.setSpacing(6)
+        tech_lines = [
+            'Python 3.11+ · PyQt6',
+            'mpv (libmpv) · python-mpv',
+            'libtorrent (可选 BT/磁力)',
+            'SQLite (历史记录)',
+        ]
+        for line in tech_lines:
+            lbl = QLabel(line)
+            lbl.setObjectName('AboutInfo')
+            info_layout.addWidget(lbl)
+        layout.addWidget(info_group)
+
+        # 许可证
+        license_group = QGroupBox('许可证')
+        license_layout = QVBoxLayout(license_group)
+        license_label = QLabel(
+            'FlashDL 使用 MIT 许可证开源发布。\n'
+            'mpv 和 libtorrent 属于各自版权所有者的财产。'
+        )
+        license_label.setObjectName('AboutInfo')
+        license_label.setWordWrap(True)
+        license_layout.addWidget(license_label)
+        layout.addWidget(license_group)
+
+        layout.addStretch()
+
+        copyright_label = QLabel(f'© 2025 FlashDL')
+        copyright_label.setObjectName('AboutInfo')
+        copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(copyright_label)
+
         return tab
 
     # ═══ 加载/保存 ═══
@@ -256,6 +328,7 @@ class SettingsDialog(QDialog):
         self.max_concurrent.setValue(get_setting('max_concurrent_tasks', config.MAX_CONCURRENT_TASKS))
         self._set_combo_value(self.speed_limit, get_setting('download_speed_limit', config.DOWNLOAD_SPEED_LIMIT))
         self.max_retries.setValue(get_setting('max_retries', config.MAX_RETRIES))
+        self.auto_clean_completed.setChecked(get_setting('auto_clean_completed', False))
 
         # BT
         self.bt_port.setValue(get_setting('bt_listen_port', config.BT_LISTEN_PORT))
@@ -267,6 +340,7 @@ class SettingsDialog(QDialog):
         self.default_volume.setValue(get_setting('default_volume', config.DEFAULT_VOLUME))
         self.auto_load_subtitle.setChecked(get_setting('subtitle_auto_load', config.SUBTITLE_AUTO_LOAD))
         self.subtitle_font_size.setValue(get_setting('subtitle_font_size', config.SUBTITLE_FONT_SIZE))
+        self.remember_progress.setChecked(get_setting('remember_progress', True))
 
         # 下载完成后操作
         action = get_setting('completion_action', 'none')
@@ -283,6 +357,8 @@ class SettingsDialog(QDialog):
         # 通用
         self.clipboard_monitor.setChecked(get_setting('clipboard_monitor', True))
         self.completion_sound.setChecked(get_setting('completion_sound', True))
+        self.minimize_to_tray.setChecked(get_setting('minimize_to_tray', False))
+        self.start_minimized.setChecked(get_setting('start_minimized', False))
 
     def _save_and_close(self):
         """保存所有设置并关闭对话框"""
@@ -294,6 +370,7 @@ class SettingsDialog(QDialog):
         set_setting('download_speed_limit', speed)
         config.DOWNLOAD_SPEED_LIMIT = speed  # 运行时立即生效
         set_setting('max_retries', self.max_retries.value())
+        set_setting('auto_clean_completed', self.auto_clean_completed.isChecked())
 
         # BT（保存到 settings，config 值在下次启动时生效）
         set_setting('bt_listen_port', self.bt_port.value())
@@ -306,6 +383,7 @@ class SettingsDialog(QDialog):
         set_setting('subtitle_auto_load', self.auto_load_subtitle.isChecked())
         set_setting('subtitle_font_size', self.subtitle_font_size.value())
         config.SUBTITLE_FONT_SIZE = self.subtitle_font_size.value()
+        set_setting('remember_progress', self.remember_progress.isChecked())
 
         # 下载完成后操作
         set_setting('completion_action', self.completion_action.currentData())
@@ -327,6 +405,8 @@ class SettingsDialog(QDialog):
         # 通用
         set_setting('clipboard_monitor', self.clipboard_monitor.isChecked())
         set_setting('completion_sound', self.completion_sound.isChecked())
+        set_setting('minimize_to_tray', self.minimize_to_tray.isChecked())
+        set_setting('start_minimized', self.start_minimized.isChecked())
 
         self.accept()
 

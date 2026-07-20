@@ -17,7 +17,7 @@ import config
 from core.download_manager import DownloadManager
 from core.download_task import DownloadTask
 from data.database import Database
-from utils.format_utils import format_size, safe_open_file, safe_open_folder
+from utils.format_utils import format_size, format_speed, safe_open_file, safe_open_folder, restyle
 from utils.signal_bus import signal_bus
 from utils.settings import get as get_setting, set_value as set_setting
 from ui.styles import get_tokens
@@ -206,8 +206,7 @@ class TaskCard(QFrame):
         # 从失败重试时，恢复默认文字颜色
         if status != DownloadTask.FAILED:
             self.speed_label.setObjectName('')
-            self.speed_label.style().unpolish(self.speed_label)
-            self.speed_label.style().polish(self.speed_label)
+            restyle(self.speed_label)
         status_map = {
             DownloadTask.WAITING: self._queue_info or '等待中',
             DownloadTask.DOWNLOADING: '下载中',
@@ -228,8 +227,7 @@ class TaskCard(QFrame):
         self.progress_bar.setValue(100)
         self.speed_label.setText('已完成')
         self.speed_label.setObjectName('StatusSuccess')
-        self.speed_label.style().unpolish(self.speed_label)
-        self.speed_label.style().polish(self.speed_label)
+        restyle(self.speed_label)
         self.time_label.setText('')
         self._update_button_states()
 
@@ -285,8 +283,7 @@ class TaskCard(QFrame):
         self.download_manager.retry_task(self.task_id)
         # 重置内联样式为默认（对象名恢复为默认标签）"""
         self.speed_label.setObjectName('')
-        self.speed_label.style().unpolish(self.speed_label)
-        self.speed_label.style().polish(self.speed_label)
+        restyle(self.speed_label)
 
     def _open_file(self):
         safe_open_file(self._file_path)
@@ -515,6 +512,8 @@ class DownloadTab(QWidget):
         # 进度更新节流：每个任务最多 10fps，避免信号风暴
         self._last_progress_update: dict[str, float] = {}
         self._status_bar_throttle = 0.0
+        # 按任务跟踪实时速率（bytes/s），用于状态栏总速率汇总
+        self._task_speeds: dict[str, float] = {}
         self._setup_ui()
         self._connect_signals()
         # 剪贴板监听（可通过设置开关）
@@ -533,7 +532,15 @@ class DownloadTab(QWidget):
 
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(8)
+        input_layout.setSpacing(6)
+
+        # URL 历史按钮（显示最近 20 条使用过的链接）
+        self.btn_url_history = QPushButton('⏱')
+        self.btn_url_history.setObjectName('UrlHistoryBtn')
+        self.btn_url_history.setFixedSize(24, 24)
+        self.btn_url_history.setToolTip('最近使用的链接')
+        self.btn_url_history.clicked.connect(self._show_url_history_menu)
+        input_layout.addWidget(self.btn_url_history)
 
         self.url_input = QPlainTextEdit()
         self.url_input.setPlaceholderText('粘贴下载链接或磁力链接...  (HTTP / HTTPS / magnet / BT)')
@@ -630,7 +637,8 @@ class DownloadTab(QWidget):
         for i in range(self.speed_limit_combo.count()):
             if self.speed_limit_combo.itemData(i) == saved_speed:
                 self.speed_limit_combo.setCurrentIndex(i)
-                config.DOWNLOAD_SPEED_LIMIT = saved_speed
+                from config import set_speed_limit
+                set_speed_limit(saved_speed)
                 break
         self.speed_limit_combo.currentIndexChanged.connect(self._on_speed_limit_changed)
         self.speed_limit_combo.setFixedWidth(80)
@@ -773,6 +781,8 @@ class DownloadTab(QWidget):
             except RuntimeError as e:
                 errors.append(f'[{url[:50]}...] {e}')
 
+        # 保存 URL 到历史记录（去重、限制条数，在清空前保存）
+        self._save_url_history(urls)
         self.url_input.clear()
 
         # 滚动到列表底部
@@ -808,8 +818,7 @@ class DownloadTab(QWidget):
         if card:
             card.speed_label.setText(f'失败: {error}')
             card.speed_label.setObjectName('StatusError')
-            card.speed_label.style().unpolish(card.speed_label)
-            card.speed_label.style().polish(card.speed_label)
+            restyle(card.speed_label)
             card.btn_pause.hide()
             card.btn_cancel.hide()
             card.btn_retry.show()
@@ -870,8 +879,7 @@ class DownloadTab(QWidget):
         """显示底部状态提示，3秒后自动消失"""
         self.status_label.setText(message)
         self.status_label.setObjectName('StatusError' if is_error else 'StatusSuccess')
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
+        restyle(self.status_label)
         # 动态插入到工具栏上方
         if self.status_label.parent() is None:
             self.layout().insertWidget(self.layout().indexOf(self.toolbar), self.status_label)
@@ -881,8 +889,14 @@ class DownloadTab(QWidget):
     def _hide_status(self):
         """隐藏状态提示并从布局移除"""
         self.status_label.setVisible(False)
-        self.layout().removeWidget(self.status_label)
-        self.status_label.setParent(None)
+        lay = self.layout()
+        if lay is not None:
+            lay.removeWidget(self.status_label)
+        try:
+            if self.status_label.parent() is not None:
+                self.status_label.setParent(None)
+        except RuntimeError:
+            pass  # 控件已被 C++ 侧销毁
 
     def _scroll_to_bottom(self):
         """将下载列表滚动到底部"""
@@ -911,38 +925,53 @@ class DownloadTab(QWidget):
             self._show_status(f'导入失败: {e}', is_error=True)
 
     def _update_status_bar(self):
-        """更新底部状态栏"""
+        """更新底部状态栏：显示任务分项计数和总下载速率"""
         tasks = self.download_manager.tasks
         total = len(tasks)
         active = sum(1 for t in tasks.values()
                      if t.status in (DownloadTask.DOWNLOADING, 'resolving_metadata'))
         completed = sum(1 for t in tasks.values() if t.status == DownloadTask.COMPLETED)
-        waiting = sum(1 for t in tasks.values() if t.status in (DownloadTask.WAITING, DownloadTask.PAUSED))
+        failed = sum(1 for t in tasks.values() if t.status == DownloadTask.FAILED)
+        waiting = sum(1 for t in tasks.values()
+                      if t.status in (DownloadTask.WAITING, DownloadTask.PAUSED))
+
+        # 汇总所有活跃任务的实时速率
+        total_speed = sum(self._task_speeds.get(t.task_id, 0)
+                          for t in tasks.values()
+                          if t.status == DownloadTask.DOWNLOADING)
 
         if total == 0:
             self._status_dot.setProperty('idle', True)
-            self._status_dot.style().unpolish(self._status_dot)
-            self._status_dot.style().polish(self._status_dot)
+            restyle(self._status_dot)
             self._status_text.setText('就绪')
             self._status_speed.setText('')
-        elif active > 0:
-            self._status_dot.setProperty('idle', False)
-            self._status_dot.style().unpolish(self._status_dot)
-            self._status_dot.style().polish(self._status_dot)
-            parts = [f'{total} 个任务']
-            if active: parts.append(f'下载中: {active}')
-            if waiting: parts.append(f'等待中: {waiting}')
-            if completed: parts.append(f'已完成: {completed}')
-            self._status_text.setText(' · '.join(parts))
-            self._status_speed.setText('')
+            self.btn_pause_all.setText('全部暂停')
+            return
+
+        is_active = active > 0
+        self._status_dot.setProperty('idle', not is_active)
+        restyle(self._status_dot)
+
+        # 构建分项状态文本（仅显示有数据的项）
+        segments = []
+        if active:
+            segments.append(f'下载中: {active}')
+        if waiting:
+            segments.append(f'排队: {waiting}')
+        if completed:
+            segments.append(f'已完成: {completed}')
+        if failed:
+            segments.append(f'失败: {failed}')
+        self._status_text.setText('  |  '.join(segments) if segments else f'{total} 个任务')
+
+        # 总速率显示
+        if total_speed > 0:
+            self._status_speed.setText(f'总速率: {format_speed(total_speed)}')
         else:
-            self._status_dot.setProperty('idle', True)
-            self._status_dot.style().unpolish(self._status_dot)
-            self._status_dot.style().polish(self._status_dot)
-            parts = [f'{total} 个任务']
-            if completed: parts.append(f'已完成: {completed}')
-            self._status_text.setText(' · '.join(parts))
             self._status_speed.setText('')
+
+        # 更新全部暂停/继续按钮文字 + Badge
+        self._update_pause_all_badge(active, waiting)
 
     def _browse_save_dir(self):
         dir_path = QFileDialog.getExistingDirectory(self, '选择保存目录', self.path_input.text())
@@ -982,6 +1011,10 @@ class DownloadTab(QWidget):
         card = self._cards.get(task_id)
         if card:
             card.update_progress(progress_info)
+        # 跟踪原始速率用于状态栏汇总
+        raw_speed = progress_info.get('speed', 0)
+        if isinstance(raw_speed, (int, float)) and raw_speed >= 0:
+            self._task_speeds[task_id] = float(raw_speed)
         # 状态栏最多 2fps
         if now - self._status_bar_throttle >= 0.5:
             self._status_bar_throttle = now
@@ -1008,8 +1041,7 @@ class DownloadTab(QWidget):
             card.set_completed(file_path)
             # 短暂高亮卡片（accent 边框，2 秒后恢复）
             card.setObjectName('TaskCardCompleted')
-            card.style().unpolish(card)
-            card.style().polish(card)
+            restyle(card)
             QTimer.singleShot(2000, lambda c=card: self._reset_card_highlight(c))
 
         # 保存到历史记录
@@ -1027,16 +1059,14 @@ class DownloadTab(QWidget):
         """恢复任务卡片默认样式"""
         if card and card.objectName() != 'TaskCard':
             card.setObjectName('TaskCard')
-            card.style().unpolish(card)
-            card.style().polish(card)
+            restyle(card)
 
     def _on_task_failed(self, task_id: str, error: str):
         card = self._cards.get(task_id)
         if card:
             card.speed_label.setText(f'失败: {error}')
             card.speed_label.setObjectName('StatusError')
-            card.speed_label.style().unpolish(card.speed_label)
-            card.speed_label.style().polish(card.speed_label)
+            restyle(card.speed_label)
 
         # 保存失败记录
         task = self.download_manager.tasks.get(task_id)
@@ -1049,24 +1079,25 @@ class DownloadTab(QWidget):
             )
 
     def _toggle_pause_all(self):
-        """切换全部暂停/全部继续"""
+        """切换全部暂停/全部继续，更新按钮Badge"""
         active = [t for t in self.download_manager.tasks.values()
                   if t.status == DownloadTask.DOWNLOADING]
         if active:
             for t in active:
                 self.download_manager.pause_task(t.task_id)
-            self.btn_pause_all.setText('全部继续')
         else:
             for t in self.download_manager.tasks.values():
                 if t.status in (DownloadTask.PAUSED, DownloadTask.WAITING):
                     self.download_manager.resume_task(t.task_id)
-            self.btn_pause_all.setText('全部暂停')
+        # 状态栏会在信号回调中自动更新Badge，这里也主动刷新以防信号延迟
+        self._update_status_bar()
 
     def _on_speed_limit_changed(self, index):
         """速度限制下拉改变时，更新全局限速配置"""
         speed_limit = self.speed_limit_combo.itemData(index)
         if speed_limit is not None:
-            config.DOWNLOAD_SPEED_LIMIT = speed_limit
+            from config import set_speed_limit
+            set_speed_limit(speed_limit)
             set_setting('download_speed_limit', speed_limit)
 
     # URL 匹配正则（HTTP/HTTPS 和磁力链接）
@@ -1144,6 +1175,7 @@ class DownloadTab(QWidget):
         # 后台异步清理（已完成的任务只需从内存移除，无需 cancel）
         for task_id in to_remove:
             self.download_manager.remove_task(task_id)
+            self._task_speeds.pop(task_id, None)  # 清理速率数据
 
     def _clear_all_tasks(self):
         """清除所有下载任务（含进行中和等待），需确认"""
@@ -1173,6 +1205,7 @@ class DownloadTab(QWidget):
             card.hide()  # 先隐藏，立即生效
             self._list_layout.removeWidget(card)
             card.deleteLater()
+            self._task_speeds.pop(task_id, None)  # 清理速率数据
         self._update_empty_state()
         # 强制刷新布局
         self._list_layout.activate()
@@ -1191,5 +1224,73 @@ class DownloadTab(QWidget):
                 worker.start()
 
     def _on_cleanup_done(self, task_id: str):
-        """后台清理完成"""
-        pass  # 卡片已在 UI 中移除，无需额外操作
+        """后台清理完成，清理关联的速度数据"""
+        self._task_speeds.pop(task_id, None)
+
+    # ═══ URL 历史记录管理 ═══
+
+    def _save_url_history(self, urls: list[str]):
+        """保存 URL 到历史记录：去重后前置，限制最大条数"""
+        try:
+            history: list[str] = get_setting('url_history', [])
+            # 将新 URL 前置（去重）
+            for url in urls:
+                u = url.strip()
+                if not u:
+                    continue
+                if u in history:
+                    history.remove(u)
+                history.insert(0, u)
+            # 截断到最大条数
+            if len(history) > config.URL_HISTORY_MAX:
+                history = history[:config.URL_HISTORY_MAX]
+            set_setting('url_history', history)
+        except Exception:
+            pass  # 历史记录保存不影响下载流程
+
+    def _show_url_history_menu(self):
+        """显示 URL 历史记录下拉菜单，点击项填入输入框"""
+        history: list[str] = get_setting('url_history', [])
+        if not history:
+            return
+
+        menu = QMenu(self)
+        menu.addAction('URL 历史记录').setEnabled(False)
+        menu.addSeparator()
+
+        for i, url in enumerate(history):
+            # 截断过长 URL 用于显示
+            display = url if len(url) <= 60 else url[:57] + '...'
+            action = menu.addAction(f'{i + 1}. {display}')
+            action.setData(url)
+
+        menu.addSeparator()
+        menu.addAction('清空历史', self._clear_url_history)
+
+        # 定位在历史按钮下方
+        btn_pos = self.btn_url_history.mapToGlobal(self.btn_url_history.rect().bottomLeft())
+        chosen = menu.exec(btn_pos)
+        if chosen and chosen.data():
+            # 将选中 URL 填入输入框（追加模式，不覆盖已有内容）
+            current = self.url_input.toPlainText().strip()
+            url = str(chosen.data())
+            if current:
+                self.url_input.setPlainText(current + '\n' + url)
+            else:
+                self.url_input.setPlainText(url)
+
+    def _clear_url_history(self):
+        """清空 URL 历史记录"""
+        set_setting('url_history', [])
+        self._show_status('URL 历史记录已清空')
+
+    # ═══ 状态栏增强 ═══
+
+    def _update_pause_all_badge(self, active: int, waiting: int):
+        """更新‘全部暂停/继续’按钮文字 + 任务计数 badge"""
+        if active > 0:
+            self.btn_pause_all.setText(f'全部暂停 ({active})')
+        elif waiting > 0:
+            self.btn_pause_all.setText(f'全部继续 ({waiting})')
+        else:
+            self.btn_pause_all.setText('全部暂停')

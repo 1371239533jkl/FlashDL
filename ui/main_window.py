@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """主窗口 - 无边框窗口、标签页管理、系统托盘"""
 
-from PyQt6.QtCore import Qt, QPoint, QSize, QRect
+from PyQt6.QtCore import Qt, QPoint, QSize, QRect, QCoreApplication
 from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QPen, QPolygon
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -87,9 +87,13 @@ class MainWindow(QMainWindow):
         # 隐藏原生标签栏（使用自定义 TabBar 替代 QTabBar）
         self.tab_widget.tabBar().hide()
         # 禁用键盘方向键切换标签页（会与全屏播放快捷键冲突）
+        # 但播放器页面需要方向键，所以仅当非播放器页面时才忽略
         _orig = self.tab_widget.keyPressEvent
         def _filtered(event):
             if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+                if self.tab_widget.currentWidget() is self.player_tab:
+                    QCoreApplication.sendEvent(self.player_tab.video_widget, event)
+                    return
                 event.ignore()
             else:
                 _orig(event)
@@ -154,6 +158,14 @@ class MainWindow(QMainWindow):
         btn_settings.setIconSize(QSize(24, 24))
         btn_settings.clicked.connect(self._open_settings)
         layout.addWidget(btn_settings, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # 快捷键提示：sidebar 仅 48px，使用极简文案避免文字被截断；完整提示放在 tooltip 中
+        shortcut_hint = QLabel('1/2/3\n切换页')
+        shortcut_hint.setObjectName('SidebarShortcut')
+        shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        shortcut_hint.setWordWrap(True)
+        shortcut_hint.setToolTip('Ctrl+1/2/3 切换页面')
+        layout.addWidget(shortcut_hint, alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
 
         return sidebar
 
@@ -257,7 +269,7 @@ class MainWindow(QMainWindow):
         title.setObjectName('TitleLabel')
         layout.addWidget(title)
 
-        version = QLabel('v2.0')
+        version = QLabel(f'v{config.APP_VERSION}')
         version.setObjectName('TitleVersion')
         layout.addWidget(version)
 
@@ -395,10 +407,13 @@ class MainWindow(QMainWindow):
         self._app_icon = self._create_app_icon()
         self.setWindowIcon(self._app_icon)
         self.tray_icon.setIcon(self._app_icon)
-        self.player_tab.video_widget.setStyleSheet('background-color: #000000; border-radius: 6px;')
         # 清除图标缓存（主题变了颜色也变了）
         if hasattr(self, '_icon_cache'):
             self._icon_cache.clear()
+        # 清除历史记录图标缓存
+        import ui.history_tab as _ht
+        if hasattr(_ht, '_icon_cache'):
+            _ht._icon_cache.clear()
         # 只重绘侧边栏图标（它们需要手动更新颜色）
         icons = ['download', 'play', 'history']
         for i, btn in self._sidebar_icons.items():

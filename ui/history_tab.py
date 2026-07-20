@@ -6,12 +6,17 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QPen, QColor, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QFrame, QMessageBox, QFileDialog
+    QPushButton, QScrollArea, QFrame, QMessageBox, QFileDialog, 
+    QAbstractItemView, QMenu
 )
 
 from data.database import Database
 from utils.format_utils import format_size, safe_open_file, safe_open_folder
 from utils.signal_bus import signal_bus
+
+
+# 模块级图标缓存（按主题），避免每次创建 HistoryCard 都重新绘制
+_icon_cache: dict[tuple[str, str], QIcon] = {}
 
 
 class HistoryCard(QFrame):
@@ -22,13 +27,22 @@ class HistoryCard(QFrame):
         self.record = record
         self.db = db
         self.parent_tab = parent_tab
+        self._checked = False  # 批量选择状态
         self.setObjectName('HistoryCard')
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(12)
+        layout.setContentsMargins(4, 10, 14, 10)
+        layout.setSpacing(8)
+
+        # 批量选择复选框（始终存在但低调）
+        from PyQt6.QtWidgets import QCheckBox
+        self._chk_select = QCheckBox()
+        self._chk_select.setFixedSize(24, 24)
+        self._chk_select.setToolTip('选择此记录进行批量操作')
+        self._chk_select.stateChanged.connect(self._on_check_changed)
+        layout.addWidget(self._chk_select)
 
         # 状态圆点
         status = self.record.get('status', '')
@@ -109,7 +123,6 @@ class HistoryCard(QFrame):
 
         btn_delete = QPushButton()
         btn_delete.setObjectName('HistoryActionBtn')
-        btn_delete.setFlat(True)
         btn_delete.setFixedSize(28, 28)
         btn_delete.setIcon(self._make_delete_icon())
         btn_delete.setIconSize(btn_delete.size() * 0.5)
@@ -138,8 +151,12 @@ class HistoryCard(QFrame):
     @staticmethod
     def _make_play_icon() -> QIcon:
         """绘制播放三角形图标 (主题自适应)"""
-        from ui.styles import get_tokens
+        from ui.styles import get_tokens, get_current_theme
         t = get_tokens()
+        theme = get_current_theme()
+        key = ('play', theme)
+        if key in _icon_cache:
+            return _icon_cache[key]
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
@@ -153,13 +170,19 @@ class HistoryCard(QFrame):
         path.closeSubpath()
         p.drawPath(path)
         p.end()
-        return QIcon(pix)
+        icon = QIcon(pix)
+        _icon_cache[key] = icon
+        return icon
 
     @staticmethod
     def _make_folder_icon() -> QIcon:
         """绘制文件夹图标 (主题自适应)"""
-        from ui.styles import get_tokens
+        from ui.styles import get_tokens, get_current_theme
         t = get_tokens()
+        theme = get_current_theme()
+        key = ('folder', theme)
+        if key in _icon_cache:
+            return _icon_cache[key]
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
@@ -178,13 +201,19 @@ class HistoryCard(QFrame):
         path.closeSubpath()
         p.drawPath(path)
         p.end()
-        return QIcon(pix)
+        icon = QIcon(pix)
+        _icon_cache[key] = icon
+        return icon
 
     @staticmethod
     def _make_delete_icon() -> QIcon:
         """绘制删除 X 图标 (主题自适应)"""
-        from ui.styles import get_tokens
+        from ui.styles import get_tokens, get_current_theme
         t = get_tokens()
+        theme = get_current_theme()
+        key = ('delete', theme)
+        if key in _icon_cache:
+            return _icon_cache[key]
         pix = QPixmap(16, 16)
         pix.fill(Qt.GlobalColor.transparent)
         p = QPainter(pix)
@@ -196,13 +225,23 @@ class HistoryCard(QFrame):
         p.drawLine(3, 3, 13, 13)
         p.drawLine(13, 3, 3, 13)
         p.end()
-        return QIcon(pix)
+        icon = QIcon(pix)
+        _icon_cache[key] = icon
+        return icon
+
+    def _on_check_changed(self, state):
+        """复选框状态变化时更新父标签页的批量删除按钮"""
+        self._checked = (state == Qt.CheckState.Checked.value)
+        if hasattr(self.parent_tab, '_update_batch_delete_btn'):
+            self.parent_tab._update_batch_delete_btn()
 
     def _delete_record(self):
         task_id = self.record.get('task_id', '')
         if task_id:
             self.db.delete_record(task_id)
         self.parent_tab.refresh()
+
+
 
 
 class HistoryTab(QWidget):
@@ -215,6 +254,7 @@ class HistoryTab(QWidget):
         self.db = Database()
         self._cards = []
         self._current_filter = 'all'  # all | completed | failed
+        self._current_time_filter = 'all'  # all | today | week | month
         self._page = 0
         self._total_count = 0
         self._loading = False  # 防止重复触发加载
@@ -232,15 +272,19 @@ class HistoryTab(QWidget):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(14)
 
+        # ── 统计面板 ──
+        self._stats_panel = self._create_stats_panel()
+        layout.addWidget(self._stats_panel)
+
         # 顶部工具栏行
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
-        # 搜索框（带占位图标）
+        # 搜索框
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText('搜索文件名...')
         self.search_input.textChanged.connect(self._on_search)
-        self.search_input.setMaximumWidth(360)
+        self.search_input.setMaximumWidth(280)
         top_row.addWidget(self.search_input)
 
         # 过滤器药丸按钮
@@ -262,7 +306,37 @@ class HistoryTab(QWidget):
 
         self._filter_btns['all'].setChecked(True)
 
+        top_row.addSpacing(12)
+
+        # 时间范围快捷筛选
+        self._time_filter_btns = {}
+        time_filters = [
+            ('all', '全部时间'),
+            ('today', '今天'),
+            ('week', '本周'),
+            ('month', '本月'),
+        ]
+        for key, label in time_filters:
+            btn = QPushButton(label)
+            btn.setObjectName('TimeFilterChip')
+            btn.setCheckable(True)
+            btn.setFixedHeight(28)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked, k=key: self._set_time_filter(k))
+            self._time_filter_btns[key] = btn
+            top_row.addWidget(btn)
+
+        self._time_filter_btns['all'].setChecked(True)
+
         top_row.addStretch()
+
+        # 批量删除按钮（初始隐藏，选中项时显示）
+        self._btn_batch_delete = QPushButton('删除选中')
+        self._btn_batch_delete.setObjectName('DangerBtn')
+        self._btn_batch_delete.setFixedWidth(100)
+        self._btn_batch_delete.clicked.connect(self._batch_delete)
+        self._btn_batch_delete.hide()
+        top_row.addWidget(self._btn_batch_delete)
 
         btn_refresh = QPushButton('刷新')
         btn_refresh.setObjectName('SmallBtn')
@@ -276,9 +350,9 @@ class HistoryTab(QWidget):
         btn_export.clicked.connect(self._export_csv)
         top_row.addWidget(btn_export)
 
-        btn_clear = QPushButton('清空')
+        btn_clear = QPushButton('清空全部')
         btn_clear.setObjectName('DangerBtn')
-        btn_clear.setFixedWidth(56)
+        btn_clear.setFixedWidth(96)
         btn_clear.clicked.connect(self._clear_all)
         top_row.addWidget(btn_clear)
         layout.addLayout(top_row)
@@ -305,22 +379,75 @@ class HistoryTab(QWidget):
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.empty_label)
 
+    def _create_stats_panel(self) -> QFrame:
+        """创建统计面板：总下载数 / 成功率 / 累计流量 / 失败数"""
+        panel = QFrame()
+        panel.setObjectName('HistoryStatsPanel')
+        p_layout = QHBoxLayout(panel)
+        p_layout.setContentsMargins(16, 12, 16, 12)
+        p_layout.setSpacing(24)
+
+        self._stat_widgets = {}
+        for key, label in [
+            ('total', '总下载'), ('success_rate', '成功率'),
+            ('total_size', '累计流量'), ('failed', '失败数'),
+        ]:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+
+            val = QLabel('--')
+            val.setObjectName('HistoryStatValue')
+            col.addWidget(val)
+
+            lbl = QLabel(label)
+            lbl.setObjectName('HistoryStatLabel')
+            col.addWidget(lbl)
+
+            p_layout.addLayout(col)
+            self._stat_widgets[key] = val
+
+        p_layout.addStretch()
+        return panel
+
+    def _update_stats(self):
+        """从数据库刷新统计面板数据"""
+        try:
+            stats = self.db.get_statistics(self._current_time_filter)
+            total = stats['total']
+            self._stat_widgets['total'].setText(str(total))
+            self._stat_widgets['success_rate'].setText(
+                f"{stats['success_rate']}%" if total > 0 else '--')
+            self._stat_widgets['total_size'].setText(
+                format_size(stats['total_size']) if stats['total_size'] > 0 else '--')
+            self._stat_widgets['failed'].setText(str(stats['failed']))
+        except Exception:
+            for w in self._stat_widgets.values():
+                w.setText('--')
+
     def _set_filter(self, filter_key: str):
-        """切换过滤器"""
+        """切换状态过滤器"""
         self._current_filter = filter_key
         for key, btn in self._filter_btns.items():
             btn.setChecked(key == filter_key)
         self.refresh()
 
+    def _set_time_filter(self, filter_key: str):
+        """切换时间范围筛选器，刷新统计和列表"""
+        self._current_time_filter = filter_key
+        for key, btn in self._time_filter_btns.items():
+            btn.setChecked(key == filter_key)
+        self.refresh()
+
     def _update_filter_style(self):
-        """过滤器样式由QSS #FilterChip规则统一管理，此方法已废弃"""
+        """过滤器样式由QSS规则统一管理，此方法已废弃"""
         pass
 
     def refresh(self):
-        """刷新历史记录列表（重置分页，加载第一页）"""
+        """刷新历史记录列表（重置分页，加载第一页，更新统计）"""
         self._page = 0
         self._total_count = 0
         self._clear_cards()
+        self._update_stats()
         self._load_more()
 
     def _load_more(self):
@@ -392,6 +519,38 @@ class HistoryTab(QWidget):
             QMessageBox.information(self, '导出成功', f'成功导出 {count} 条历史记录到:\n{file_path}')
         except Exception as e:
             QMessageBox.warning(self, '导出失败', f'导出失败: {e}')
+
+    def _batch_delete(self):
+        """批量删除所有勾选的历史记录"""
+        selected = [card for card in self._cards if getattr(card, '_checked', False)]
+        if not selected:
+            return
+
+        reply = QMessageBox.question(
+            self, '确认删除', f'确定要删除选中的 {len(selected)} 条历史记录吗？',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        for card in selected:
+            task_id = card.record.get('task_id', '')
+            if task_id:
+                self.db.delete_record(task_id)
+            self._list_layout.removeWidget(card)
+            self._cards.remove(card)
+            card.deleteLater()
+
+        self._update_stats()
+        self._update_batch_delete_btn()
+
+    def _update_batch_delete_btn(self):
+        """根据选中数量更新批量删除按钮的可见性和文字"""
+        count = sum(1 for card in self._cards if getattr(card, '_checked', False))
+        if count > 0:
+            self._btn_batch_delete.setText(f'删除选中 ({count})')
+            self._btn_batch_delete.show()
+        else:
+            self._btn_batch_delete.hide()
 
     def _clear_cards(self):
         for card in self._cards:

@@ -34,6 +34,8 @@ class PlayerTab(QWidget):
         self._click_timer.timeout.connect(self._toggle_play)
         self.playlist = PlaylistManager()
         self.playlist.load()
+        # 播放模式: 0=顺序, 1=单曲循环, 2=列表循环, 3=随机
+        self._play_mode = 0
         self._setup_ui()
         self._connect_signals()
         # 恢复播放列表后在 UI 中显示
@@ -44,6 +46,8 @@ class PlayerTab(QWidget):
         self._shortcut_overlay = _ShortcutOverlay(self)
         # 视频信息覆盖层
         self._video_info_overlay = _VideoInfoOverlay(self)
+        # 品牌引导占位（未加载视频时显示）
+        self._brand_placeholder = self._create_brand_placeholder()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -63,10 +67,18 @@ class PlayerTab(QWidget):
         # 视频显示区域
         self.video_widget = QWidget()
         self.video_widget.setMinimumHeight(300)
-        self.video_widget.setStyleSheet('background-color: #000000;')
+        self.video_widget.setObjectName('VideoWidget')
         self.video_widget.setMouseTracking(True)
         self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # 启用拖放支持
+        self.video_widget.setAcceptDrops(True)
+        self.video_widget.dragEnterEvent = self._on_video_drag_enter
+        self.video_widget.dragMoveEvent = self._on_video_drag_enter
+        self.video_widget.dropEvent = self._on_video_drop
+        # 点击视频区域时获取焦点，确保键盘快捷键（空格/方向键）能正常工作
+        self.video_widget.mousePressEvent = self._on_video_press
         left_layout.addWidget(self.video_widget, 1)
+
 
         # 全屏覆盖控制条（独立透明窗口）
         self.fullscreen_controls = _FullscreenControlsOverlay(self)
@@ -114,6 +126,9 @@ class PlayerTab(QWidget):
         self.seek_slider.sliderPressed.connect(self._on_seek_start)
         self.seek_slider.sliderReleased.connect(self._on_seek_end)
         self.seek_slider.sliderMoved.connect(self._on_seek_moved)
+        # 修复: 鼠标在 slider 外释放时 sliderReleased 不会触发，导致 _is_seeking 卡在 True
+        # 强制在 mouseReleaseEvent 中重置 _is_seeking
+        self.seek_slider.mouseReleaseEvent = self._slider_mouse_release
         seek_row.addWidget(self.seek_slider)
 
         self.time_total = QLabel('00:00:00')
@@ -145,7 +160,6 @@ class PlayerTab(QWidget):
         self.btn_play = QPushButton('▶')
         self.btn_play.setFixedSize(36, 36)
         self.btn_play.setObjectName('PlayPauseBtn')
-        self.btn_play.setStyleSheet('font-size: 14px;')
         self.btn_play.clicked.connect(self._toggle_play)
         btn_row.addWidget(self.btn_play)
 
@@ -204,13 +218,6 @@ class PlayerTab(QWidget):
         self.btn_subtitle.clicked.connect(self._on_subtitle_menu)
         btn_row.addWidget(self.btn_subtitle)
 
-        # 字幕偏移状态
-        self.sub_delay_label = QLabel()
-        self.sub_delay_label.setObjectName('MonoLabel')
-        self.sub_delay_label.setFixedWidth(36)
-        self.sub_delay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        btn_row.addWidget(self.sub_delay_label)
-
         btn_row.addSpacing(6)
 
         # 截图按钮
@@ -258,7 +265,7 @@ class PlayerTab(QWidget):
         return controls
 
     def _create_playlist_panel(self) -> QWidget:
-        """创建播放列表面板"""
+        """创建播放列表面板（含循环/随机模式按钮）"""
         panel = QWidget()
         panel.setObjectName('PlaylistPanel')
 
@@ -270,9 +277,26 @@ class PlayerTab(QWidget):
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setSpacing(6)
         label = QLabel('播放列表')
         label.setObjectName('PlaylistHeader')
         header_layout.addWidget(label)
+
+        # 播放模式按钮
+        self._btn_loop = QPushButton('🔁')
+        self._btn_loop.setObjectName('PlayModeBtn')
+        self._btn_loop.setFixedSize(28, 22)
+        self._btn_loop.setToolTip('循环模式: 顺序 → 单曲循环 → 列表循环')
+        self._btn_loop.clicked.connect(self._cycle_play_mode)
+        header_layout.addWidget(self._btn_loop)
+
+        self._btn_shuffle = QPushButton('🔀')
+        self._btn_shuffle.setObjectName('PlayModeBtn')
+        self._btn_shuffle.setFixedSize(28, 22)
+        self._btn_shuffle.setToolTip('随机播放')
+        self._btn_shuffle.clicked.connect(self._toggle_shuffle)
+        header_layout.addWidget(self._btn_shuffle)
+
         header_layout.addStretch()
         layout.addWidget(header)
 
@@ -304,6 +328,105 @@ class PlayerTab(QWidget):
         layout.addWidget(btn_row)
 
         return panel
+
+    def _create_brand_placeholder(self) -> QWidget:
+        """创建品牌引导占位（未加载视频时居中显示，铺满视频区域）"""
+        # 作为 PlayerTab 的子 widget，使用相对坐标系确保位置稳定，不会漂浮
+        widget = QWidget(self)
+        widget.setObjectName('BrandPlaceholder')
+        widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        icon = QLabel('🎬')
+        icon.setObjectName('PlayerBrandIcon')
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon)
+
+        title = QLabel('FlashDL')
+        title.setObjectName('PlayerBrandText')
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        hint = QLabel('拖放视频文件到此处播放\n或从下载页点击播放按钮')
+        hint.setObjectName('PlayerBrandHint')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+        # 延迟到事件循环后定位，此时视频区域 geometry 已稳定
+        QTimer.singleShot(0, self._resize_brand_placeholder)
+        return widget
+
+    def _resize_brand_placeholder(self):
+        """品牌占位跟随视频区域大小变化（使用 PlayerTab 相对坐标）"""
+        if not hasattr(self, '_brand_placeholder') or not self._brand_placeholder:
+            return
+        geo = self.video_widget.geometry()
+        if geo.width() <= 0 or geo.height() <= 0:
+            return  # 布局尚未完成，跳过
+        # 把 video_widget 的左上角映射到 PlayerTab 坐标系
+        top_left = self.video_widget.mapTo(self, QPoint(0, 0))
+        self._brand_placeholder.setGeometry(top_left.x(), top_left.y(), geo.width(), geo.height())
+        self._brand_placeholder.raise_()  # 确保在 mpv native 窗口之上
+
+    def _on_video_drag_enter(self, event):
+        """视频区域拖放进入：只接受包含本地视频文件 URL 的拖动"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            # 检查至少有一个本地文件路径
+            for url in urls:
+                if url.isLocalFile() and url.toLocalFile():
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def _on_video_drop(self, event):
+        """视频区域拖放放下：加载第一个视频文件并播放"""
+        urls = event.mimeData().urls()
+        for url in urls:
+            path = url.toLocalFile()
+            if path and os.path.exists(path):
+                # 加载并播放，同时加入播放列表
+                self.playlist.add_file(path)
+                # 将当前项切到刚拖放的文件
+                idx = self.playlist._items.index(path)
+                self.playlist.set_current(idx)
+                self._refresh_playlist_ui()
+                self.player.load(path)
+                self.player.play()
+                self._auto_load_subtitle(path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def _on_video_press(self, event):
+        """点击视频区域时获取焦点，确保键盘快捷键生效；同时处理单击切换播放"""
+        self.video_widget.setFocus()
+        # 点击视频区域获取焦点，让键盘快捷键（空格/方向键）能正常触发
+        # LeftButton 的单击/双击逻辑由 eventFilter 优先处理
+        self.video_widget.setFocus()
+        QWidget.mousePressEvent(self.video_widget, event)
+
+    def showEvent(self, event):
+        """标签页显示时同步显示占位并重新定位"""
+        super().showEvent(event)
+        if hasattr(self, '_brand_placeholder') and self._brand_placeholder:
+            self._brand_placeholder.show()
+            self._resize_brand_placeholder()
+
+    def hideEvent(self, event):
+        """标签页隐藏时同步隐藏占位，避免漂浮到其他页面"""
+        super().hideEvent(event)
+        if hasattr(self, '_brand_placeholder') and self._brand_placeholder:
+            self._brand_placeholder.hide()
+
+    def resizeEvent(self, event):
+        """窗口大小变化时同步占位尺寸"""
+        super().resizeEvent(event)
+        self._resize_brand_placeholder()
 
     def _connect_signals(self):
         self.player.position_changed.connect(self._on_position_changed)
@@ -560,6 +683,8 @@ class PlayerTab(QWidget):
 
         # 单击暂停/播放（延迟执行，等待是否双击）
         if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            # 点击视频区域立即获取焦点，确保后续键盘快捷键（空格/方向键）能被 eventFilter 接收
+            self.video_widget.setFocus()
             # 复用_init中创建的_click_timer，只需重启即可
             self._click_timer.start(300)
             return True
@@ -583,6 +708,14 @@ class PlayerTab(QWidget):
     def _on_seek_moved(self, value):
         self.time_current.setText(format_time_ms(value))
 
+    def _slider_mouse_release(self, event):
+        """兜底：无论 sliderReleased 信号是否触发，鼠标释放都重置 _is_seeking 并 seek"""
+        QSlider.mouseReleaseEvent(self.seek_slider, event)
+        if self._is_seeking:
+            self._is_seeking = False
+            self.player.seek(self.seek_slider.value())
+            self._save_playback_progress()
+
     def _on_position_changed(self, position):
         if not self._is_seeking:
             self.seek_slider.setValue(position)
@@ -601,14 +734,44 @@ class PlayerTab(QWidget):
             self._save_playback_progress()
         else:  # StoppedState
             self.btn_play.setText('▶')
+            # 播放停止后清除列表高亮
+            self.playlist._current_index = -1
+            self._refresh_playlist_ui()
 
     def _on_media_status_changed(self, status):
         if status == MpvPlayer.END_OF_MEDIA:
-            # 自动播放下一个
-            if self.playlist.has_next():
+            # 根据播放模式决定行为
+            if self._play_mode == 1:  # 单曲循环
+                path = self.player.current_file
+                if path:
+                    self.player.load(path)
+                    self.player.play()
+                    return
+            elif self._play_mode == 2 and self.playlist.has_next():
                 self._play_next()
+                return
+            elif self._play_mode == 3:  # 随机
+                import random
+                if self.playlist.count > 0:
+                    idx = random.randint(0, self.playlist.count - 1)
+                    # 跳过当前播放项
+                    if self.playlist.count > 1 and idx == self.playlist.current_index:
+                        idx = (idx + 1) % self.playlist.count
+                    path = self.playlist.set_current(idx)
+                    if path:
+                        self._refresh_playlist_ui()
+                        self.player.load(path)
+                        self.player.play()
+                        self._auto_load_subtitle(path)
+                        return
+            else:
+                if self.playlist.has_next():
+                    self._play_next()
+                    return
         elif status == MpvPlayer.LOADED:
-            # 视频加载完毕，延迟100ms后恢复播放进度（给Qt时间处理完内部状态）
+            # 视频加载完毕，隐藏占位，更新音轨/字幕标签，延迟恢复播放进度
+            if hasattr(self, '_brand_placeholder') and self._brand_placeholder:
+                self._brand_placeholder.hide()
             path = self.player.current_file
             if path:
                 QTimer.singleShot(100, lambda p=path: self._restore_playback_progress(p))
@@ -627,6 +790,34 @@ class PlayerTab(QWidget):
         self.playlist.clear()
         self.playlist_widget.clear()
         self.player.stop()
+
+    def _cycle_play_mode(self):
+        """循环切换播放模式: 0=顺序 → 1=单曲循环 → 2=列表循环 → 0"""
+        self._play_mode = (self._play_mode + 1) % 3
+        self._update_play_mode_buttons()
+
+    def _toggle_shuffle(self):
+        """切换随机播放模式"""
+        if self._play_mode == 3:
+            self._play_mode = 0
+        else:
+            self._play_mode = 3
+        self._update_play_mode_buttons()
+
+    def _update_play_mode_buttons(self):
+        """更新播放模式按钮的激活状态"""
+        mode = self._play_mode
+        # 循环按钮: 0=不亮, 1/2=亮
+        self._btn_loop.setProperty('active', mode in (1, 2))
+        loop_tip = {0: '顺序播放', 1: '单曲循环', 2: '列表循环'}.get(mode, '')
+        self._btn_loop.setToolTip(f'循环模式: {loop_tip}')
+        # 随机按钮
+        self._btn_shuffle.setProperty('active', mode == 3)
+        self._btn_shuffle.setToolTip('随机播放' if mode != 3 else '关闭随机')
+        # 刷新样式
+        for btn in (self._btn_loop, self._btn_shuffle):
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     def _on_playlist_item_clicked(self, item: QListWidgetItem):
         row = self.playlist_widget.row(item)
@@ -754,7 +945,7 @@ class PlayerTab(QWidget):
     def _on_subtitle_menu(self):
         """字幕按钮菜单（内嵌字幕轨 + 外挂字幕 + 音轨 + 延迟）"""
         menu = QMenu(self)
-        menu.setStyleSheet('font-size: 12px; padding: 4px;')
+        menu.setObjectName('PlayerMenu')
 
         has_any = False
 
@@ -847,7 +1038,7 @@ class PlayerTab(QWidget):
     def _on_video_menu(self):
         """视频菜单（视频轨道 + 亮度/对比度/饱和度/伽马）"""
         menu = QMenu(self)
-        menu.setStyleSheet('font-size: 12px; padding: 4px;')
+        menu.setObjectName('PlayerMenu')
 
         # ── 视频轨道 ──
         v_tracks = self.player.get_video_tracks()
@@ -931,7 +1122,7 @@ class PlayerTab(QWidget):
     def _on_chapter_menu(self):
         """章节导航菜单"""
         menu = QMenu(self)
-        menu.setStyleSheet('font-size: 12px; padding: 4px;')
+        menu.setObjectName('PlayerMenu')
 
         chapters = self.player.get_chapters()
         current_idx = self.player.chapter
@@ -1049,14 +1240,7 @@ class PlayerTab(QWidget):
             ov.show_overlay()
 
     def _update_subtitle_delay_label(self):
-        """更新字幕延迟标签显示"""
-        delay_ms = self.player.get_subtitle_delay()
-        if delay_ms == 0:
-            self.sub_delay_label.setText('同步')
-        elif delay_ms > 0:
-            self.sub_delay_label.setText(f'+{delay_ms/1000:.1f}s')
-        else:
-            self.sub_delay_label.setText(f'{delay_ms/1000:.1f}s')
+        """字幕延迟状态已移除（保留空方法避免调用报错）"""
 
     def _save_subtitle_offset(self):
         """保存当前视频的字幕偏移量"""

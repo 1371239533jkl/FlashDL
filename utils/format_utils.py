@@ -67,6 +67,15 @@ def shorten_path(path: str, max_len: int = 200) -> str:
     return os.path.join(directory, filename)
 
 
+def restyle(widget) -> None:
+    """统一重刷 widget 样式，替代项目中重复的 unpolish/polish 调用"""
+    s = widget.style()
+    if s is not None:
+        s.unpolish(widget)
+        s.polish(widget)
+
+
+
 def safe_open_file(file_path: str) -> bool:
     """安全打开文件/文件夹：校验路径存在且无注入风险后调用系统关联程序"""
     if not file_path or not isinstance(file_path, str):
@@ -93,7 +102,8 @@ def safe_open_folder(file_path: str) -> bool:
         return False
     try:
         import subprocess
-        subprocess.Popen(f'explorer /select,"{os.path.normpath(file_path)}"')
+        # ponytail: 使用 list 参数避免 shell 解析，同时保持双引号不会破坏命令
+        subprocess.Popen(['explorer', '/select,', os.path.normpath(file_path)], shell=False)
         return True
     except Exception:
         return False
