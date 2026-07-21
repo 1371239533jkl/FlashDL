@@ -11,8 +11,8 @@ from core.magnet_session_manager import is_libtorrent_available
 from utils.signal_bus import signal_bus
 from utils.settings import get as get_setting
 
-# 磁力任务的活跃状态集合
-_ACTIVE_STATUSES = {'downloading', 'resolving_metadata'}
+# 活跃任务状态集合
+_ACTIVE_STATUSES = {'downloading', 'resolving_metadata', 'merging'}
 
 
 class DownloadManager(QObject):
@@ -21,6 +21,8 @@ class DownloadManager(QObject):
     def __init__(self):
         super().__init__()
         self._tasks = {}  # task_id -> DownloadTask 或 MagnetDownloadTask
+        from core.download_scheduler import DownloadScheduler
+        self._scheduler = DownloadScheduler(self)
 
     @property
     def tasks(self) -> dict:
@@ -43,6 +45,9 @@ class DownloadManager(QObject):
                 )
             from core.magnet_download_task import MagnetDownloadTask
             task = MagnetDownloadTask(url, save_dir, file_name)
+        elif url.lower().split('?', 1)[0].endswith('.m3u8'):
+            from core.hls_download_task import HLSDownloadTask
+            task = HLSDownloadTask(url, save_dir, file_name, headers=headers)
         else:
             task = DownloadTask(url, save_dir, file_name, thread_count, headers=headers)
 
@@ -56,10 +61,13 @@ class DownloadManager(QObject):
     def start_task(self, task_id: str) -> bool:
         """准备并启动一个任务"""
         task = self._tasks.get(task_id)
-        if not task:
+        if not task or task.status != task.WAITING:
             return False
 
-        if task.status == 'waiting':
+        if not self._scheduler.downloads_allowed():
+            return False
+
+        if task.status == 'waiting' and not getattr(task, 'is_prepared', False):
             if not task.prepare():
                 signal_bus.task_failed.emit(task_id, task.error_message)
                 return False
@@ -80,7 +88,11 @@ class DownloadManager(QObject):
 
     def resume_task(self, task_id: str) -> bool:
         task = self._tasks.get(task_id)
-        if not task:
+        if not task or not self._scheduler.downloads_allowed():
+            return False
+        if task.status == task.WAITING:
+            return self.start_task(task_id)
+        if task.status != task.PAUSED:
             return False
 
         active = sum(1 for t in self._tasks.values() if t.status in _ACTIVE_STATUSES)
@@ -150,6 +162,9 @@ class DownloadManager(QObject):
             if task_type == 'magnet' and is_libtorrent_available():
                 from core.magnet_download_task import MagnetDownloadTask
                 task = MagnetDownloadTask.load_from_state(task_dir)
+            elif task_type == 'hls':
+                from core.hls_download_task import HLSDownloadTask
+                task = HLSDownloadTask.load_from_state(task_dir)
             elif task_type != 'magnet':
                 task = DownloadTask.load_from_state(task_dir)
 
@@ -244,6 +259,8 @@ class DownloadManager(QObject):
 
     def _try_start_next(self):
         """尝试启动队列中等待的任务（尽可能填满所有空闲槽位）"""
+        if not self._scheduler.downloads_allowed():
+            return
         while True:
             active = sum(1 for t in self._tasks.values() if t.status in _ACTIVE_STATUSES)
             if active >= self._max_concurrent:

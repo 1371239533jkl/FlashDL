@@ -72,6 +72,7 @@ class MagnetDownloadTask(BaseDownloadTask):
 
         self._metadata_start_time = time.time()
         os.makedirs(self._temp_dir, exist_ok=True)
+        self.is_prepared = True
         self._save_state()
         return True
 

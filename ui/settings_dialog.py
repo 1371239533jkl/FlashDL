@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """设置对话框 - 集中管理所有用户偏好设置"""
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTime
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QWidget, QLineEdit, QSpinBox, QCheckBox,
-    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider
+    QComboBox, QFileDialog, QFormLayout, QGroupBox, QSlider, QTimeEdit
 )
 
 import config
@@ -18,7 +18,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('设置')
-        self.setMinimumSize(750, 840)
+        self.setMinimumSize(750, 870)
         self._setup_ui()
         self._load_settings()
 
@@ -79,6 +79,21 @@ class SettingsDialog(QDialog):
         self.max_concurrent = QSpinBox()
         self.max_concurrent.setRange(1, 10)
         form.addRow('最大同时下载数:', self.max_concurrent)
+
+        self.schedule_enabled = QCheckBox('仅在指定时间段下载')
+        form.addRow('', self.schedule_enabled)
+        schedule_row = QWidget()
+        schedule_layout = QHBoxLayout(schedule_row)
+        schedule_layout.setContentsMargins(0, 0, 0, 0)
+        self.schedule_start = QTimeEdit()
+        self.schedule_start.setDisplayFormat('HH:mm')
+        self.schedule_end = QTimeEdit()
+        self.schedule_end.setDisplayFormat('HH:mm')
+        schedule_layout.addWidget(self.schedule_start)
+        schedule_layout.addWidget(QLabel('至'))
+        schedule_layout.addWidget(self.schedule_end)
+        schedule_layout.addStretch()
+        form.addRow('定时下载:', schedule_row)
 
         self.thread_count = QComboBox()
         for i in [1, 2, 4, 8, 16]:
@@ -326,6 +341,9 @@ class SettingsDialog(QDialog):
         self.download_dir.setText(get_setting('download_dir', config.DEFAULT_DOWNLOAD_DIR))
         self._set_combo_value(self.thread_count, get_setting('thread_count', config.DEFAULT_THREAD_COUNT))
         self.max_concurrent.setValue(get_setting('max_concurrent_tasks', config.MAX_CONCURRENT_TASKS))
+        self.schedule_enabled.setChecked(get_setting('schedule_enabled', False))
+        self.schedule_start.setTime(QTime.fromString(get_setting('schedule_start_time', '02:00'), 'HH:mm'))
+        self.schedule_end.setTime(QTime.fromString(get_setting('schedule_end_time', '06:00'), 'HH:mm'))
         self._set_combo_value(self.speed_limit, get_setting('download_speed_limit', config.DOWNLOAD_SPEED_LIMIT))
         self.max_retries.setValue(get_setting('max_retries', config.MAX_RETRIES))
         self.auto_clean_completed.setChecked(get_setting('auto_clean_completed', False))
@@ -366,6 +384,11 @@ class SettingsDialog(QDialog):
         set_setting('download_dir', self.download_dir.text().strip())
         set_setting('thread_count', self.thread_count.currentData())
         set_setting('max_concurrent_tasks', self.max_concurrent.value())
+        set_setting('schedule_enabled', self.schedule_enabled.isChecked())
+        set_setting('schedule_start_time', self.schedule_start.time().toString('HH:mm'))
+        set_setting('schedule_end_time', self.schedule_end.time().toString('HH:mm'))
+        if hasattr(self.parent(), 'download_manager'):
+            self.parent().download_manager._scheduler.refresh()
         speed = self.speed_limit.currentData()
         set_setting('download_speed_limit', speed)
         config.DOWNLOAD_SPEED_LIMIT = speed  # 运行时立即生效

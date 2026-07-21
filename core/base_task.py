@@ -37,6 +37,7 @@ class BaseDownloadTask(QObject):
         self.status = self.WAITING
         self.error_message = ''
         self.created_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        self.is_prepared = False
 
         # 速度采样（滑动窗口）
         self._speed_samples = deque(maxlen=config.SPEED_WINDOW_SIZE)

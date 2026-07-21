@@ -114,6 +114,7 @@ class DownloadTask(BaseDownloadTask):
 
         os.makedirs(self._state_dir, exist_ok=True)
         self._create_chunks()
+        self.is_prepared = True
         self._save_state()
         return True
 
@@ -320,6 +321,7 @@ class DownloadTask(BaseDownloadTask):
             'status': self.status,
             'created_time': self.created_time,
             'chunks': self.chunks,
+            'headers': self.headers,
         }
         self._atomic_json_write(state, self._state_dir)
 
@@ -342,13 +344,15 @@ class DownloadTask(BaseDownloadTask):
             save_dir=state['save_dir'],
             file_name=state['file_name'],
             thread_count=state['thread_count'],
-            task_id=state['task_id']
+            task_id=state['task_id'],
+            headers=state.get('headers', {})
         )
         task.total_size = state['total_size']
         task.downloaded_size = state['downloaded_size']
         task.supports_range = state.get('supports_range', False)
         task.created_time = state.get('created_time', '')
         task.chunks = state.get('chunks', [])
+        task.is_prepared = True
         task.status = task.PAUSED  # 恢复时始终为暂停状态
 
         # 验证输出文件完整性（替代旧的 temp_file 检测）
